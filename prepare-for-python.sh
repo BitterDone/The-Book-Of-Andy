@@ -59,8 +59,7 @@ pip install --upgrade openai-whisper feedparser requests torch
 
 # ---- RUN TRANSCRIPTION ----
 echo "[*] Running transcription pipeline..."
-python "$PY_SCRIPT" 
-# --rss "$RSS_URL" --repo "$REPO_DIR"
+python "$PY_SCRIPT" --rss "$RSS_URL" --repo "$REPO_DIR"
 
 # ---- COMMIT & PUSH RESULTS ----
 git add transcripts/*.txt || true
