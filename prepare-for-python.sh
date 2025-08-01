@@ -3,8 +3,8 @@ set -euo pipefail
 
 # ---- CONFIG ----
 REPO_DIR="$HOME/podcast-transcripts"
-REPO_URL="https://github.com/yourusername/podcast-transcripts.git"
-RSS_URL="https://example.com/feed.xml"
+# REPO_URL="https://github.com/BitterDone/The-Book-Of-Andy.git"
+RSS_URL="https://mfceoproject.libsyn.com/rss2"
 PY_SCRIPT="$REPO_DIR/transcribe.py"
 VENV_DIR="$REPO_DIR/.venv"
 
@@ -32,17 +32,17 @@ if ! command -v pip3 >/dev/null 2>&1; then
 fi
 
 # ---- UPDATE OR CLONE REPO ----
-if [ ! -d "$REPO_DIR" ]; then
-    echo "[*] Cloning repository..."
-    git clone "$REPO_URL" "$REPO_DIR"
-else
-    echo "[*] Updating repository..."
-    cd "$REPO_DIR"
-    git pull --rebase
-fi
+# if [ ! -d "$REPO_DIR" ]; then
+#     echo "[*] Cloning repository..."
+    # git clone "$REPO_URL" "$REPO_DIR"
+# else
+echo "[*] Updating repository..."
+# cd "$REPO_DIR"
+git pull --rebase
+# fi
 
 # ---- SETUP PYTHON VENV ----
-cd "$REPO_DIR"
+# cd "$REPO_DIR"
 
 if [ ! -d "$VENV_DIR" ]; then
     echo "[*] Creating Python virtual environment..."
@@ -59,7 +59,8 @@ pip install --upgrade openai-whisper feedparser requests torch
 
 # ---- RUN TRANSCRIPTION ----
 echo "[*] Running transcription pipeline..."
-python "$PY_SCRIPT" --rss "$RSS_URL" --repo "$REPO_DIR"
+python "$PY_SCRIPT" 
+# --rss "$RSS_URL" --repo "$REPO_DIR"
 
 # ---- COMMIT & PUSH RESULTS ----
 git add transcripts/*.txt || true
