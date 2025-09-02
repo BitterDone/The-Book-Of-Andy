@@ -2,6 +2,9 @@
 
 # ---- CHECK HUGGING FACE AUTH ----
 echo "[*] Checking Hugging Face authentication..."
+echo "Do you need to accept T/C to access a gated HF model?"
+# https://huggingface.co/pyannote/segmentation-3.0
+# https://huggingface.co/pyannote/speaker-diarization-3.1
 
 HF_TOKEN_FILE="$HOME/.huggingface/token"
 
@@ -39,6 +42,36 @@ if ! check_hf_auth; then
 else
     echo "[✓] Hugging Face authentication found."
 fi
+
+# ---- CHECK HUGGING FACE MODEL ACCESS ----
+echo "[*] Verifying access to pyannote/speaker-diarization-3.1..."
+
+if ! huggingface-cli whoami &>/dev/null; then
+    echo "[!] Hugging Face CLI not authenticated."
+    echo "    Run: huggingface-cli login"
+    exit 1
+fi
+
+# Try to check access by hitting the model page API
+ACCESS_CHECK=$(curl -s -H "Authorization: Bearer ${HF_TOKEN:-}" https://huggingface.co/api/models/pyannote/speaker-diarization-3.1)
+
+if echo "$ACCESS_CHECK" | grep -q '"private":true'; then
+    if echo "$ACCESS_CHECK" | grep -q '"gated":true'; then
+        echo "[!] The model 'pyannote/speaker-diarization-3.1' is gated."
+        echo "    Please visit: https://huggingface.co/pyannote/speaker-diarization-3.1"
+        echo "    and accept the terms of use with your Hugging Face account."
+        exit 1
+    fi
+fi
+
+if echo "$ACCESS_CHECK" | grep -q '"error"'; then
+    echo "[!] Could not verify access to pyannote/speaker-diarization-3.1."
+    echo "    Make sure your HF_TOKEN is set and valid."
+    echo "    Run: export HF_TOKEN=your_token_here"
+    exit 1
+fi
+
+echo "[✓] Hugging Face access to diarization model confirmed."
 
 # ---- CONFIG ----
 REPO_DIR="$HOME/The-Book-Of-Andy"
