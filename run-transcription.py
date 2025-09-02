@@ -9,6 +9,7 @@ import requests
 import whisper
 from pyannote.audio import Pipeline
 from datetime import timedelta
+import warnings
 
 # ---- CONFIG ----
 TRANSCRIPTS_DIR = "original_transcripts"
@@ -64,6 +65,9 @@ def transcribe_with_speakers(model, audio_file: str, hf_token: str) -> str:
     return "\n".join(lines)
 
 def main():
+    warnings.filterwarnings("ignore", category=DeprecationWarning)
+    warnings.filterwarnings("ignore", category=UserWarning, module="torchaudio")
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--rss", required=True, help="Podcast RSS feed URL")
     parser.add_argument("--repo", required=True, help="Path to local repo")
