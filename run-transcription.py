@@ -67,6 +67,8 @@ def transcribe_with_speakers(model, audio_file: str, hf_token: str) -> str:
 def main():
     warnings.filterwarnings("ignore", category=DeprecationWarning)
     warnings.filterwarnings("ignore", category=UserWarning, module="torchaudio")
+    warnings.filterwarnings("ignore", category=UserWarning, module="pyannote")
+    warnings.filterwarnings("ignore", category=UserWarning, module="speechbrain")
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--rss", required=True, help="Podcast RSS feed URL")
