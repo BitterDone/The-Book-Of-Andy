@@ -9,7 +9,7 @@ import requests
 import whisper
 
 # ---- CONFIG ----
-TRANSCRIPTS_DIR = "transcripts"
+TRANSCRIPTS_DIR = "original_transcripts"
 WHISPER_MODEL = "base"  # tiny, base, small, medium, large
 
 def hash_guid(guid: str) -> str:
