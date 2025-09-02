@@ -16,10 +16,10 @@ if ! command -v ffmpeg >/dev/null 2>&1; then
     sudo apt-get update && sudo apt-get install -y ffmpeg
 fi
 
-if ! command -v git >/dev/null 2>&1; then
-    echo "[*] Installing git..."
-    sudo apt-get update && sudo apt-get install -y git
-fi
+# if ! command -v git >/dev/null 2>&1; then
+#     echo "[*] Installing git..."
+#     sudo apt-get update && sudo apt-get install -y git
+# fi
 
 if ! command -v python3 >/dev/null 2>&1; then
     echo "[!] Python3 not found. Please install manually."
@@ -31,15 +31,15 @@ if ! command -v pip3 >/dev/null 2>&1; then
     sudo apt-get update && sudo apt-get install -y python3-pip
 fi
 
-# ---- UPDATE OR CLONE REPO ----
-# if [ ! -d "$REPO_DIR" ]; then
-#     echo "[*] Cloning repository..."
-    # git clone "$REPO_URL" "$REPO_DIR"
-# else
-echo "[*] Updating repository..."
-# cd "$REPO_DIR"
-git pull --rebase
-# fi
+# # ---- UPDATE OR CLONE REPO ----
+# # if [ ! -d "$REPO_DIR" ]; then
+# #     echo "[*] Cloning repository..."
+#     # git clone "$REPO_URL" "$REPO_DIR"
+# # else
+# echo "[*] Updating repository..."
+# # cd "$REPO_DIR"
+# git pull --rebase
+# # fi
 
 # ---- SETUP PYTHON VENV ----
 # cd "$REPO_DIR"
