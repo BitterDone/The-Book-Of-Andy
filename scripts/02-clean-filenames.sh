@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 
-echo "-->          cd transcripts"
-cd transcripts
+echo "-->          cd original_transcripts"
+cd original_transcripts
 
-echo "-->          cd'd transcripts. make removeSpecialChars"
+echo "-->          cd'd original_transcripts. make removeSpecialChars"
 mkdir removeSpecialChars
 
 echo "-->          made removeSpecialChars. move txt files"
