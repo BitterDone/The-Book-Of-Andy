@@ -64,4 +64,5 @@ echo "[*] Installing/updating Python packages..."
     huggingface_hub \
     faster-whisper \
     librosa \
-    soundfile
+    soundfile \
+    huggingface_hub
