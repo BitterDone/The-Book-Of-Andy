@@ -12,7 +12,7 @@ cd ..
 rm -rf removeSpecialChars
 
 mkdir cutLeadingPrefix
-mv *.txt ./cutLeadingPrefix/
+mv *.txt cutLeadingPrefix/
 
 # cd cutLeadingPrefix/
 
