@@ -37,14 +37,14 @@ def clean_audio(infile: str, outfile: str):
 def format_time(seconds: float) -> str:
     return str(timedelta(seconds=int(seconds)))
 
-def transcribe_with_speakers(model, audio_file: str) -> str:
+def transcribe_with_speakers(model, audio_file: str, hf_token: str) -> str:
     """Run Whisper + diarization and return speaker-labeled transcript"""
 
     # Whisper with timestamps
     result = model.transcribe(audio_file, word_timestamps=True)
 
     # PyAnnote diarization
-    pipeline = Pipeline.from_pretrained(DIARIZATION_MODEL)
+    pipeline = Pipeline.from_pretrained(DIARIZATION_MODEL, use_auth_token=hf_token)
     diarization = pipeline(audio_file)
 
     lines = []
@@ -67,6 +67,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--rss", required=True, help="Podcast RSS feed URL")
     parser.add_argument("--repo", required=True, help="Path to local repo")
+    parser.add_argument("--token", required=True, help="Hugging Face token for diarization model")
     args = parser.parse_args()
 
     # Prepare output directory
@@ -101,7 +102,7 @@ def main():
         clean_audio(raw_audio, clean_wav)
 
         print(f"[*] Transcribing with speakers...")
-        transcript = transcribe_with_speakers(model, clean_wav)
+        transcript = transcribe_with_speakers(model, clean_wav, args.token)
 
         with open(txt_path, "w", encoding="utf-8") as f:
             f.write(f"# {entry.title}\n")
