@@ -64,6 +64,11 @@ def transcribe_with_speakers(model, audio_file: str, hf_token: str) -> str:
 
     return "\n".join(lines)
 
+def transcribe(model, audio_file: str) -> str:
+    """Run Whisper model and return transcript text"""
+    result = model.transcribe(audio_file)
+    return result["text"]
+
 def main():
     warnings.filterwarnings("ignore", category=DeprecationWarning)
     warnings.filterwarnings("ignore", category=UserWarning, module="torchaudio")
@@ -74,6 +79,7 @@ def main():
     parser.add_argument("--rss", required=True, help="Podcast RSS feed URL")
     parser.add_argument("--repo", required=True, help="Path to local repo")
     parser.add_argument("--token", required=True, help="Hugging Face token for diarization model")
+    parser.add_argument("--diarize", required=True, help="Control speaker diarization (on/off)")
     args = parser.parse_args()
 
     # Prepare output directory
@@ -108,7 +114,12 @@ def main():
         clean_audio(raw_audio, clean_wav)
 
         print(f"[*] Transcribing with speakers...")
-        transcript = transcribe_with_speakers(model, clean_wav, args.token)
+        if args.diarize.lower() == "on":
+            # Full transcription with diarization
+            transcript = transcribe_with_speakers(model, clean_wav, args.token)
+        else:
+            # Simple transcription without diarization
+            transcript = transcribe(model, clean_wav)
 
         with open(txt_path, "w", encoding="utf-8") as f:
             f.write(f"# {entry.title}\n")
