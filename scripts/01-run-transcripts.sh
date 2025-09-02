@@ -49,4 +49,4 @@ VENV_DIR="$REPO_DIR/.venv"
 
 # ---- RUN TRANSCRIPTION ----
 echo "[*] Running transcription pipeline..."
-python "$PY_SCRIPT" --rss "$RSS_URL" --repo "$REPO_DIR"
+"$VENV_DIR/bin/python" "$PY_SCRIPT" --rss "$RSS_URL" --repo "$REPO_DIR"
