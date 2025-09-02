@@ -1,5 +1,15 @@
 #!/usr/bin/env bash
 
+# ---- CONFIG ----
+REPO_DIR="$HOME/The-Book-Of-Andy"
+# REPO_URL="https://github.com/BitterDone/The-Book-Of-Andy.git"
+RSS_URL="https://mfceoproject.libsyn.com/rss2"
+PY_SCRIPT="$REPO_DIR/run-transcription.py"
+VENV_DIR="$REPO_DIR/.venv"
+
+echo "[*] Activating virtual environment..."
+source "$VENV_DIR/bin/activate"
+
 # ---- CHECK HUGGING FACE AUTH ----
 echo "[*] Checking Hugging Face authentication..."
 echo "Do you need to accept T/C to access a gated HF model?"
@@ -72,13 +82,6 @@ if echo "$ACCESS_CHECK" | grep -q '"error"'; then
 fi
 
 echo "[✓] Hugging Face access to diarization model confirmed."
-
-# ---- CONFIG ----
-REPO_DIR="$HOME/The-Book-Of-Andy"
-# REPO_URL="https://github.com/BitterDone/The-Book-Of-Andy.git"
-RSS_URL="https://mfceoproject.libsyn.com/rss2"
-PY_SCRIPT="$REPO_DIR/run-transcription.py"
-VENV_DIR="$REPO_DIR/.venv"
 
 # ---- RUN TRANSCRIPTION ----
 echo "[*] Running transcription pipeline..."
