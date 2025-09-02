@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Fully-Python script
+# Fully-Python script with speaker diarization
 import argparse
 import hashlib
 import os
@@ -7,10 +7,13 @@ import subprocess
 import feedparser
 import requests
 import whisper
+from pyannote.audio import Pipeline
+from datetime import timedelta
 
 # ---- CONFIG ----
 TRANSCRIPTS_DIR = "original_transcripts"
 WHISPER_MODEL = "base"  # tiny, base, small, medium, large
+DIARIZATION_MODEL = "pyannote/speaker-diarization-3.1"
 
 def hash_guid(guid: str) -> str:
     """Stable short ID from RSS GUID or URL"""
@@ -31,10 +34,34 @@ def clean_audio(infile: str, outfile: str):
         "-ac", "1", "-ar", "16000", outfile
     ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-def transcribe(model, audio_file: str) -> str:
-    """Run Whisper model and return transcript text"""
-    result = model.transcribe(audio_file)
-    return result["text"]
+def format_time(seconds: float) -> str:
+    return str(timedelta(seconds=int(seconds)))
+
+def transcribe_with_speakers(model, audio_file: str) -> str:
+    """Run Whisper + diarization and return speaker-labeled transcript"""
+
+    # Whisper with timestamps
+    result = model.transcribe(audio_file, word_timestamps=True)
+
+    # PyAnnote diarization
+    pipeline = Pipeline.from_pretrained(DIARIZATION_MODEL)
+    diarization = pipeline(audio_file)
+
+    lines = []
+    for turn, _, speaker in diarization.itertracks(yield_label=True):
+        # Collect Whisper text segments that fall into this diarization window
+        segment_texts = [
+            seg["text"]
+            for seg in result["segments"]
+            if seg["start"] >= turn.start and seg["end"] <= turn.end
+        ]
+        text = " ".join(segment_texts).strip()
+        if text:
+            lines.append(
+                f"[{format_time(turn.start)} - {format_time(turn.end)}] {speaker}: {text}"
+            )
+
+    return "\n".join(lines)
 
 def main():
     parser = argparse.ArgumentParser()
@@ -73,8 +100,8 @@ def main():
         print(f"[*] Cleaning audio...")
         clean_audio(raw_audio, clean_wav)
 
-        print(f"[*] Transcribing...")
-        transcript = transcribe(model, clean_wav)
+        print(f"[*] Transcribing with speakers...")
+        transcript = transcribe_with_speakers(model, clean_wav)
 
         with open(txt_path, "w", encoding="utf-8") as f:
             f.write(f"# {entry.title}\n")

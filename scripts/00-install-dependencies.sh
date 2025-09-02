@@ -54,5 +54,14 @@ source "$VENV_DIR/bin/activate"
 
 # ---- INSTALL PYTHON DEPENDENCIES ----
 echo "[*] Installing/updating Python packages..."
-pip install --upgrade pip
-pip install --upgrade openai-whisper feedparser requests torch
+pip install --upgrade \
+    pip \
+    git+https://github.com/openai/whisper.git \
+    feedparser \
+    requests \
+    torch \
+    pyannote.audio \
+    huggingface_hub \
+    faster-whisper \
+    librosa \
+    soundfile
