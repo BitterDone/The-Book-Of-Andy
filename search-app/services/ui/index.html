@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+<head><title>Podcast Search</title></head>
+<body>
+<h1>Podcast Semantic Search</h1>
+<input id="query" placeholder="Enter search terms"/>
+<button onclick="search()">Search</button>
+<pre id="results"></pre>
+
+<script>
+async function search() {
+  const q = document.getElementById("query").value;
+  // Replace with actual embedding from model for real semantic search
+  const response = await fetch("http://localhost:7700/indexes/transcripts/search", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer MASTER_KEY"
+    },
+    body: JSON.stringify({ q: q, limit: 10 })
+  });
+  const data = await response.json();
+  document.getElementById("results").textContent = JSON.stringify(data, null, 2);
+}
+</script>
+</body>
+</html>

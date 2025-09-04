@@ -1,0 +1,35 @@
+version: "3.9"
+
+services:
+  meilisearch:
+    image: getmeili/meilisearch:v1.11
+    ports:
+      - "7700:7700"
+    volumes:
+      - ./meili_data:/meili_data
+    command: meilisearch --db-path /meili_data --master-key MASTER_KEY
+
+  embedder:
+    build: ./services/embedder
+    environment:
+      - MEILI_URL=http://meilisearch:7700
+      - MASTER_KEY=MASTER_KEY
+      - TRANSCRIPTS_DIR=/transcripts
+      - PRECOMPUTED_FILE=/transcripts/precomputed_transcripts.json
+    volumes:
+      - ./data/transcripts:/transcripts
+      - ./meili_data:/meili_data:Z
+    depends_on:
+      - meilisearch
+    command: >
+      /bin/bash -c "
+      python embed_new.py &&
+      python preload_meili.py
+      "
+
+  ui:
+    build: ./services/ui
+    ports:
+      - "8080:80"
+    depends_on:
+      - meilisearch
