@@ -39,7 +39,9 @@ def format_time(seconds: float) -> str:
     return str(timedelta(seconds=int(seconds)))
 
 def transcribe_with_speakers(model, audio_file: str, hf_token: str) -> str:
-    """Run Whisper + diarization, keeping Whisper as ground truth timeline."""
+    """Run Whisper + diarization, keeping Whisper as ground truth timeline,
+    and filling diarization gaps with Whisper fallback.
+    """
 
     # Whisper with timestamps
     result = model.transcribe(audio_file, word_timestamps=True)
@@ -74,6 +76,35 @@ def transcribe_with_speakers(model, audio_file: str, hf_token: str) -> str:
             last_speaker = speaker
 
         lines.append(f"[{format_time(start)} - {format_time(end)}] {speaker}: {text}")
+
+    # ---- Option 3 extra: fill diarization gaps that Whisper didn’t cover ----
+    # Walk through diarization timeline and insert dummy lines if Whisper missed it.
+    whisper_start = result["segments"][0]["start"]
+    whisper_end = result["segments"][-1]["end"]
+
+    for turn, _, spk in diarization.itertracks(yield_label=True):
+        if turn.end < whisper_start or turn.start > whisper_end:
+            continue  # outside whisper scope
+        overlap = any(
+            seg["start"] <= turn.end and seg["end"] >= turn.start
+            for seg in result["segments"]
+        )
+        if not overlap:
+            gap_line = (
+                f"[{format_time(turn.start)} - {format_time(turn.end)}] "
+                f"{spk}: [no Whisper transcript — diarization only]"
+            )
+            print(f"[!] Filling diarization-only gap: {gap_line}")
+            lines.append(gap_line)
+
+    # Keep transcript sorted by time
+    def line_start_time(line: str) -> float:
+        # extract HH:MM:SS from "[HH:MM:SS - ...]"
+        timestamp = line.split("]")[0][1:].split(" - ")[0]
+        h, m, s = map(int, timestamp.split(":"))
+        return h * 3600 + m * 60 + s
+
+    lines.sort(key=line_start_time)
 
     return "\n".join(lines)
 
