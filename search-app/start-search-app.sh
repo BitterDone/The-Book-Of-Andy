@@ -1,1 +1,1 @@
-podman-compose --build --security-opt label=disable up
+podman-compose up --build

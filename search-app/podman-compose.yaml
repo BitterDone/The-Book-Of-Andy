@@ -10,6 +10,8 @@ services:
     command: meilisearch --db-path /meili_data --master-key MASTER_KEY
 
   embedder:
+    security_opt:
+      - label=disable
     build: ./services/embedder
     environment:
       - MEILI_URL=http://meilisearch:7700
