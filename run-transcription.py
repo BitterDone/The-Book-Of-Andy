@@ -39,7 +39,7 @@ def format_time(seconds: float) -> str:
     return str(timedelta(seconds=int(seconds)))
 
 def transcribe_with_speakers(model, audio_file: str, hf_token: str) -> str:
-    """Run Whisper + diarization and return speaker-labeled transcript"""
+    """Run Whisper + diarization, keeping Whisper as ground truth timeline."""
 
     # Whisper with timestamps
     result = model.transcribe(audio_file, word_timestamps=True)
@@ -49,18 +49,26 @@ def transcribe_with_speakers(model, audio_file: str, hf_token: str) -> str:
     diarization = pipeline(audio_file)
 
     lines = []
-    for turn, _, speaker in diarization.itertracks(yield_label=True):
-        # Collect Whisper text segments that fall into this diarization window
-        segment_texts = [
-            seg["text"]
-            for seg in result["segments"]
-            if seg["start"] >= turn.start and seg["end"] <= turn.end
-        ]
-        text = " ".join(segment_texts).strip()
-        if text:
-            lines.append(
-                f"[{format_time(turn.start)} - {format_time(turn.end)}] {speaker}: {text}"
-            )
+    last_speaker = "UNKNOWN"
+
+    for seg in result["segments"]:
+        start = seg["start"]
+        end = seg["end"]
+        text = seg["text"].strip()
+
+        # Find diarization speaker that overlaps this whisper segment
+        speaker = None
+        for turn, _, spk in diarization.itertracks(yield_label=True):
+            if turn.start <= end and turn.end >= start:  # overlap condition
+                speaker = spk
+                break
+
+        if speaker is None:
+            speaker = last_speaker  # carry forward previous speaker
+        else:
+            last_speaker = speaker
+
+        lines.append(f"[{format_time(start)} - {format_time(end)}] {speaker}: {text}")
 
     return "\n".join(lines)
 
