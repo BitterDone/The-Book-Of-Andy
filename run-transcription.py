@@ -64,7 +64,12 @@ def transcribe_with_speakers(model, audio_file: str, hf_token: str) -> str:
                 break
 
         if speaker is None:
-            speaker = last_speaker  # carry forward previous speaker
+            # No diarization label → fallback
+            speaker = last_speaker
+            print(
+                f"[!] Gap detected: {format_time(start)}–{format_time(end)} "
+                f"→ assigning speaker={speaker}"
+            )
         else:
             last_speaker = speaker
 
