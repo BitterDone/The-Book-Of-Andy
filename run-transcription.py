@@ -10,6 +10,7 @@ import whisper
 from pyannote.audio import Pipeline
 from datetime import timedelta
 import warnings
+import math
 
 # ---- CONFIG ----
 TRANSCRIPTS_DIR = "original_transcripts"
@@ -38,7 +39,7 @@ def clean_audio(infile: str, outfile: str):
 def format_time(seconds: float) -> str:
     return str(timedelta(seconds=int(seconds)))
 
-def transcribe_with_speakers(model, audio_file: str, hf_token: str) -> str:
+def transcribe_with_speakers(model, audio_file: str, hf_token: str, fill_gaps: bool) -> str:
     """Run Whisper + diarization, keeping Whisper as ground truth timeline,
     and filling diarization gaps with Whisper fallback.
     """
@@ -53,6 +54,7 @@ def transcribe_with_speakers(model, audio_file: str, hf_token: str) -> str:
     lines = []
     last_speaker = "UNKNOWN"
 
+    # ---- OPTION 1: Whisper text always kept ----
     for seg in result["segments"]:
         start = seg["start"]
         end = seg["end"]
@@ -79,23 +81,24 @@ def transcribe_with_speakers(model, audio_file: str, hf_token: str) -> str:
 
     # ---- Option 3 extra: fill diarization gaps that Whisper didn’t cover ----
     # Walk through diarization timeline and insert dummy lines if Whisper missed it.
-    whisper_start = result["segments"][0]["start"]
-    whisper_end = result["segments"][-1]["end"]
+    if fill_gaps:
+        whisper_start = result["segments"][0]["start"]
+        whisper_end = result["segments"][-1]["end"]
 
-    for turn, _, spk in diarization.itertracks(yield_label=True):
-        if turn.end < whisper_start or turn.start > whisper_end:
-            continue  # outside whisper scope
-        overlap = any(
-            seg["start"] <= turn.end and seg["end"] >= turn.start
-            for seg in result["segments"]
-        )
-        if not overlap:
-            gap_line = (
-                f"[{format_time(turn.start)} - {format_time(turn.end)}] "
-                f"{spk}: [no Whisper transcript — diarization only]"
+        for turn, _, spk in diarization.itertracks(yield_label=True):
+            if turn.end < whisper_start or turn.start > whisper_end:
+                continue  # outside whisper scope
+            overlap = any(
+                seg["start"] <= turn.end and seg["end"] >= turn.start
+                for seg in result["segments"]
             )
-            print(f"[!] Filling diarization-only gap: {gap_line}")
-            lines.append(gap_line)
+            if not overlap:
+                gap_line = (
+                    f"[{format_time(turn.start)} - {format_time(turn.end)}] "
+                    f"{spk}: [no Whisper transcript — diarization only]"
+                )
+                print(f"[!] Filling diarization-only gap: {gap_line}")
+                lines.append(gap_line)
 
     # Keep transcript sorted by time
     def line_start_time(line: str) -> float:
@@ -124,6 +127,7 @@ def main():
     parser.add_argument("--repo", required=True, help="Path to local repo")
     parser.add_argument("--token", required=True, help="Hugging Face token for diarization model")
     parser.add_argument("--diarize", required=True, help="Control speaker diarization (on/off)")
+    parser.add_argument("--fill-gaps", default="off", help="Fill diarization gaps with placeholders (on/off)")
     args = parser.parse_args()
 
     # Prepare output directory
@@ -160,7 +164,7 @@ def main():
         if args.diarize.lower() == "on":
             print(f"[*] Transcribing without speakers...")
             # Full transcription with diarization
-            transcript = transcribe_with_speakers(model, clean_wav, args.token)
+            transcript = transcribe_with_speakers(model, clean_wav, args.token, fill_gaps=(args.fill_gaps.lower() == "on")
         else:
             print(f"[*] Transcribing with speakers...")
             # Simple transcription without diarization
