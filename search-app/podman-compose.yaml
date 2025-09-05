@@ -23,11 +23,11 @@ services:
       - ./meili_data:/meili_data:Z
     depends_on:
       - meilisearch
-    command: >
-      /bin/bash -c "
-      python embed_new.py &&
-      python preload_meili.py
-      "
+    # command: >
+    #   /bin/bash -c "
+    #   python embed_new.py &&
+    #   python preload_meili.py
+    #   "
 
   ui:
     build: ./services/ui
