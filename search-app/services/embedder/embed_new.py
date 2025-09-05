@@ -11,7 +11,8 @@ PRECOMPUTED_FILE = os.environ["PRECOMPUTED_FILE"]
 client = Client(MEILI_URL, MASTER_KEY)
 
 # Create the index if it doesn't exist
-if "transcripts" not in [idx.uid for idx in client.get_indexes()]:
+# if "transcripts" not in [idx["uid"] for idx in client.get_indexes()]:
+if "transcripts" not in client.get_indexes():
     client.create_index("transcripts", options={"primaryKey": "id"})
     
 index = client.index("transcripts")
@@ -19,7 +20,12 @@ index = client.index("transcripts")
 model = SentenceTransformer("all-MiniLM-L6-v2")
 
 # Check which transcripts already exist in Meilisearch
-existing_ids = {doc["id"] for doc in index.get_documents({"limit": 10000})["results"]}
+# existing_ids = {doc["id"] for doc in index.get_documents({"limit": 10000})["results"]}
+
+# Fetch existing documents
+existing_docs = index.get_documents({"limit": 10000})  # returns DocumentsResults
+existing_ids = {doc["id"] for doc in existing_docs.results}    # iterate directly
+
 
 precomputed = []
 if os.path.exists(PRECOMPUTED_FILE):
