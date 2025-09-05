@@ -2,9 +2,12 @@ version: "3.9"
 
 services:
   meilisearch:
-    image: getmeili/meilisearch:v1.11
+    image: docker.io/getmeili/meilisearch:v1.11
+    container_name: meilisearch
     ports:
       - "7700:7700"
+    networks:
+      - search-app-net
     volumes:
       - ./meili_data:/meili_data
     command: meilisearch --db-path /meili_data --master-key MASTER_KEY
@@ -18,6 +21,8 @@ services:
       - MASTER_KEY=MASTER_KEY
       - TRANSCRIPTS_DIR=/transcripts
       - PRECOMPUTED_FILE=/transcripts/precomputed_transcripts.json
+    networks:
+      - search-app-net
     volumes:
       - ./data/transcripts:/transcripts
       - ./meili_data:/meili_data:Z
@@ -29,9 +34,13 @@ services:
     #   python preload_meili.py
     #   "
 
-  ui:
-    build: ./services/ui
-    ports:
-      - "8080:80"
-    depends_on:
-      - meilisearch
+  # ui:
+  #   build: ./services/ui
+  #   ports:
+  #     - "8080:80"
+  #   depends_on:
+  #     - meilisearch
+
+networks:
+  search-app-net:
+    external: true
