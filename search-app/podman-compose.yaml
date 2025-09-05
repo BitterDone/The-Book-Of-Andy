@@ -3,7 +3,7 @@ version: "3.9"
 services:
   meilisearch:
     image: docker.io/getmeili/meilisearch:v1.11
-    container_name: meilisearch
+    # container_name: meilisearch
     ports:
       - "7700:7700"
     networks:
@@ -17,7 +17,8 @@ services:
       - label=disable
     build: ./services/embedder
     environment:
-      - MEILI_URL=http://meilisearch:7700
+      # - MEILI_URL=http://meilisearch:7700
+      - MEILI_URL=http://host.containers.internal:7700
       - MASTER_KEY=MASTER_KEY
       - TRANSCRIPTS_DIR=/transcripts
       - PRECOMPUTED_FILE=/transcripts/precomputed_transcripts.json
@@ -43,4 +44,5 @@ services:
 
 networks:
   search-app-net:
-    external: true
+    driver: bridge
+    # external: true
