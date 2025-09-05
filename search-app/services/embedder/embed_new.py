@@ -9,6 +9,11 @@ TRANSCRIPTS_DIR = os.environ["TRANSCRIPTS_DIR"]
 PRECOMPUTED_FILE = os.environ["PRECOMPUTED_FILE"]
 
 client = Client(MEILI_URL, MASTER_KEY)
+
+# Create the index if it doesn't exist
+if "transcripts" not in [idx.uid for idx in client.get_indexes()]:
+    client.create_index("transcripts", options={"primaryKey": "id"})
+    
 index = client.index("transcripts")
 
 model = SentenceTransformer("all-MiniLM-L6-v2")
