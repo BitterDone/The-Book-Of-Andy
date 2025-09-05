@@ -3,9 +3,11 @@ import os
 from meilisearch import Client
 
 # --- CONFIG ---
-MEILI_URL = os.environ.get("MEILI_URL", "http://localhost:7700")
-MASTER_KEY = os.environ.get("MASTER_KEY", "MASTER_KEY")
-PRECOMPUTED_FILE = os.environ.get("PRECOMPUTED_FILE", "precomputed_transcripts.json")
+MEILI_URL = os.environ["MEILI_URL"]
+MASTER_KEY = os.environ["MASTER_KEY"]
+TRANSCRIPTS_DIR = os.environ["TRANSCRIPTS_DIR"]
+PRECOMPUTED_FILE = os.environ["PRECOMPUTED_FILE"]
+
 INDEX_NAME = "transcripts"
 VECTOR_SIZE = 384  # size of embedding from all-MiniLM-L6-v2
 
@@ -13,16 +15,24 @@ VECTOR_SIZE = 384  # size of embedding from all-MiniLM-L6-v2
 client = Client(MEILI_URL, MASTER_KEY)
 
 # --- Create index if it doesn't exist ---
-if INDEX_NAME not in [i["uid"] for i in client.get_indexes()]:
-    client.create_index(INDEX_NAME)
+# if INDEX_NAME not in [i["uid"] for i in client.get_indexes()]:
+if "transcripts" not in client.get_indexes():
+    client.create_index(
+        uid="transcripts",
+        options={
+            "primaryKey": "id",   # must match your document field
+        }
+    )
 
-index = client.index(INDEX_NAME)
+index = client.index("transcripts")
 
 # --- Enable vector search ---
 index.update_settings({
-    "vector": {
-        "size": VECTOR_SIZE,
-        "distance": "Cosine"
+     "embedders": {
+        "all-MiniLM-L6-v2": {  # name of your embedding model
+            "source": "userProvided",
+            "dimensions": VECTOR_SIZE
+        }
     }
 })
 

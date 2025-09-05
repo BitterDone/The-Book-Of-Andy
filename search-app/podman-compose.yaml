@@ -29,11 +29,15 @@ services:
       - ./meili_data:/meili_data:Z
     depends_on:
       - meilisearch
-    # command: >
-    #   /bin/bash -c "
-    #   python embed_new.py &&
-    #   python preload_meili.py
-    #   "
+    command: >
+      /bin/bash -c "
+      until curl -H \"Authorization: Bearer MASTER_KEY\" http://host.containers.internal:7700/health; do
+        echo 'Waiting for Meilisearch...';
+        sleep 2;
+      done;
+      python embed_new.py &&
+      python preload_meili.py
+      "
 
   # ui:
   #   build: ./services/ui

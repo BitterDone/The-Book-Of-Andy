@@ -7,5 +7,6 @@ RUN pip install --no-cache-dir --upgrade pip \
 
 WORKDIR /app
 COPY embed_new.py .
+COPY preload_meili.py .
 # This CMD is overruled when the command: section of the podman-compose.yaml is enabled
 CMD ["python", "embed_new.py"]
