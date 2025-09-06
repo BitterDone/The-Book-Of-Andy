@@ -1,7 +1,7 @@
 FROM docker.io/python:3.11-bullseye
 
 # Upgrade pip & install deps
-RUN pip install --no-cache-dir --upgrade pip \
+RUN pip install -q --no-cache-dir --upgrade pip \
     sentence-transformers \
     meilisearch
 

@@ -1,5 +1,6 @@
 import os
 import json
+import glob
 from sentence_transformers import SentenceTransformer
 from meilisearch import Client
 
@@ -7,6 +8,18 @@ MEILI_URL = os.environ["MEILI_URL"]
 MASTER_KEY = os.environ["MASTER_KEY"]
 TRANSCRIPTS_DIR = os.environ["TRANSCRIPTS_DIR"]
 PRECOMPUTED_FILE = os.environ["PRECOMPUTED_FILE"]
+
+# --- Verify transcripts directory ---
+if not os.path.exists(TRANSCRIPTS_DIR):
+    print(f"[✗] ERROR: Transcripts directory not found at {TRANSCRIPTS_DIR}")
+    exit(1)
+
+txt_files = glob.glob(os.path.join(TRANSCRIPTS_DIR, "*.txt"))
+if not txt_files:
+    print(f"[✗] ERROR: No .txt files found in {TRANSCRIPTS_DIR}")
+    exit(1)
+
+print(f"[✓] Found {len(txt_files)} transcript files in {TRANSCRIPTS_DIR}")
 
 client = Client(MEILI_URL, MASTER_KEY)
 

@@ -25,7 +25,7 @@ services:
     networks:
       - search-app-net
     volumes:
-      - ./data/transcripts:/transcripts
+      - ../transcripts:/transcripts
       - ./meili_data:/meili_data:Z
     depends_on:
       - meilisearch
