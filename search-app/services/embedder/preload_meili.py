@@ -1,6 +1,7 @@
 import json
 import os
 from meilisearch import Client
+from meilisearch.errors import MeilisearchApiError
 
 # --- CONFIG ---
 MEILI_URL = os.environ["MEILI_URL"]
@@ -15,8 +16,11 @@ VECTOR_SIZE = 384  # size of embedding from all-MiniLM-L6-v2
 client = Client(MEILI_URL, MASTER_KEY)
 
 # --- Create index if it doesn't exist ---
+try:
+    client.get_index("transcripts")
+except MeilisearchApiError:
 # if INDEX_NAME not in [i["uid"] for i in client.get_indexes()]:
-if "transcripts" not in client.get_indexes():
+# if "transcripts" not in client.get_indexes():
     client.create_index(
         uid="transcripts",
         options={

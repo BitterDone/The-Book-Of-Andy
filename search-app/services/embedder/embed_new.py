@@ -3,6 +3,7 @@ import json
 import glob
 from sentence_transformers import SentenceTransformer
 from meilisearch import Client
+from meilisearch.errors import MeilisearchApiError
 
 MEILI_URL = os.environ["MEILI_URL"]
 MASTER_KEY = os.environ["MASTER_KEY"]
@@ -24,9 +25,18 @@ print(f"[✓] Found {len(txt_files)} transcript files in {TRANSCRIPTS_DIR}")
 client = Client(MEILI_URL, MASTER_KEY)
 
 # Create the index if it doesn't exist
+
+try:
+    client.get_index("transcripts")
+except MeilisearchApiError:
 # if "transcripts" not in [idx["uid"] for idx in client.get_indexes()]:
-if "transcripts" not in client.get_indexes():
-    client.create_index("transcripts", options={"primaryKey": "id"})
+# if "transcripts" not in client.get_indexes():
+    client.create_index(
+        uid="transcripts",
+        options={
+            "primaryKey": "id",   # must match your document field
+        }
+    )
     
 index = client.index("transcripts")
 
