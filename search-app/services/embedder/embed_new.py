@@ -1,6 +1,7 @@
 import os
 import json
 import glob
+import re
 from sentence_transformers import SentenceTransformer
 from meilisearch import Client
 from meilisearch.errors import MeilisearchApiError
@@ -25,7 +26,6 @@ print(f"[✓] Found {len(txt_files)} transcript files in {TRANSCRIPTS_DIR}")
 client = Client(MEILI_URL, MASTER_KEY)
 
 # Create the index if it doesn't exist
-
 try:
     client.get_index("transcripts")
 except MeilisearchApiError:
@@ -60,13 +60,26 @@ if os.path.exists(PRECOMPUTED_FILE) and os.path.getsize(PRECOMPUTED_FILE) > 0:
 else:
     print(f"[!] {PRECOMPUTED_FILE} not found or empty, starting fresh.")
 
+# --- Process transcript files ---
 for file in os.listdir(TRANSCRIPTS_DIR):
-    if not file.endswith(".txt") or file in existing_ids:
+    if not file.endswith(".txt"):
         continue
-    text = open(os.path.join(TRANSCRIPTS_DIR, file)).read()
-    embedding = model.encode(text).tolist()
-    precomputed.append({"id": file, "text": text, "embedding": embedding})
-    print(f"[✓] Prepared {file}")
 
-with open(PRECOMPUTED_FILE, "w") as f:
+    # --- Sanitize ID from filename ---
+    base_id = os.path.splitext(file)[0]
+    safe_id = re.sub(r'[^a-zA-Z0-9_-]', '_', base_id)
+
+    if safe_id in existing_ids:
+        continue
+
+    text = open(os.path.join(TRANSCRIPTS_DIR, file), encoding="utf-8").read()
+    embedding = model.encode(text).tolist()
+
+    precomputed.append({"id": safe_id, "text": text, "embedding": embedding})
+    print(f"[✓] Prepared {file} -> id={safe_id}")
+
+# --- Save results ---
+with open(PRECOMPUTED_FILE, "w", encoding="utf-8") as f:
     json.dump(precomputed, f)
+
+print(f"[✓] Wrote {len(precomputed)} documents to {PRECOMPUTED_FILE}")
