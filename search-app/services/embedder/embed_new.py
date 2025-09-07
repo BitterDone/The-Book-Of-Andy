@@ -51,8 +51,14 @@ existing_ids = {doc["id"] for doc in existing_docs.results}    # iterate directl
 
 
 precomputed = []
-if os.path.exists(PRECOMPUTED_FILE):
-    precomputed = json.load(open(PRECOMPUTED_FILE))
+if os.path.exists(PRECOMPUTED_FILE) and os.path.getsize(PRECOMPUTED_FILE) > 0:
+    with open(PRECOMPUTED_FILE, "r", encoding="utf-8") as f:
+        try:
+            precomputed = json.load(f)
+        except json.JSONDecodeError:
+            print(f"[!] Warning: {PRECOMPUTED_FILE} was not valid JSON, starting fresh.")
+else:
+    print(f"[!] {PRECOMPUTED_FILE} not found or empty, starting fresh.")
 
 for file in os.listdir(TRANSCRIPTS_DIR):
     if not file.endswith(".txt") or file in existing_ids:
