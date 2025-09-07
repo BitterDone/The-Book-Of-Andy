@@ -75,7 +75,12 @@ for file in os.listdir(TRANSCRIPTS_DIR):
     text = open(os.path.join(TRANSCRIPTS_DIR, file), encoding="utf-8").read()
     embedding = model.encode(text).tolist()
 
-    precomputed.append({"id": safe_id, "text": text, "embedding": embedding})
+    precomputed.append({
+        "id": file,
+        "text": text,
+        "_vectors": {"all-MiniLM-L6-v2": embedding}
+    })
+    
     print(f"[✓] Prepared {file} -> id={safe_id}")
 
 # --- Save results ---
