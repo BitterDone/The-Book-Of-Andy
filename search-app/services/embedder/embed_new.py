@@ -11,6 +11,8 @@ MASTER_KEY = os.environ["MASTER_KEY"]
 TRANSCRIPTS_DIR = os.environ["TRANSCRIPTS_DIR"]
 PRECOMPUTED_FILE = os.environ["PRECOMPUTED_FILE"]
 VECTOR_SIZE = 384  # size of embedding from all-MiniLM-L6-v2
+CHUNK_SIZE = 200    # words per chunk
+OVERLAP = 50        # words overlapping between chunks
 
 # --- Verify transcripts directory ---
 if not os.path.exists(TRANSCRIPTS_DIR):
@@ -24,24 +26,18 @@ if not txt_files:
 
 print(f"[✓] Found {len(txt_files)} transcript files in {TRANSCRIPTS_DIR}")
 
+# --- Connect to Meilisearch ---
 client = Client(MEILI_URL, MASTER_KEY)
 
 # Create the index if it doesn't exist
 try:
     client.get_index("transcripts")
 except MeilisearchApiError:
-# if "transcripts" not in [idx["uid"] for idx in client.get_indexes()]:
-# if "transcripts" not in client.get_indexes():
-    client.create_index(
-        uid="transcripts",
-        options={
-            "primaryKey": "id",   # must match your document field
-        }
-    )
-    
+    client.create_index(uid="transcripts", options={"primaryKey": "id"})
+
 index = client.index("transcripts")
 
-# --- Register the user-provided embedder ---
+# --- Register user-provided embedder ---
 index.update_settings({
     "embedders": {
         "all-MiniLM-L6-v2": {
@@ -51,16 +47,14 @@ index.update_settings({
     }
 })
 
+# --- Load embedding model ---
 model = SentenceTransformer("all-MiniLM-L6-v2")
 
-# Check which transcripts already exist in Meilisearch
-# existing_ids = {doc["id"] for doc in index.get_documents({"limit": 10000})["results"]}
+# --- Fetch existing documents ---
+existing_docs = index.get_documents({"limit": 10000})
+existing_ids = {doc["id"] for doc in existing_docs.results}
 
-# Fetch existing documents
-existing_docs = index.get_documents({"limit": 10000})  # returns DocumentsResults
-existing_ids = {doc["id"] for doc in existing_docs.results}    # iterate directly
-
-
+# --- Load or initialize precomputed JSON ---
 precomputed = []
 if os.path.exists(PRECOMPUTED_FILE) and os.path.getsize(PRECOMPUTED_FILE) > 0:
     with open(PRECOMPUTED_FILE, "r", encoding="utf-8") as f:
@@ -71,31 +65,48 @@ if os.path.exists(PRECOMPUTED_FILE) and os.path.getsize(PRECOMPUTED_FILE) > 0:
 else:
     print(f"[!] {PRECOMPUTED_FILE} not found or empty, starting fresh.")
 
+# --- Helper: split text into overlapping chunks ---
+def chunk_text(text, chunk_size=CHUNK_SIZE, overlap=OVERLAP):
+    words = text.split()
+    chunks = []
+    for i in range(0, len(words), chunk_size - overlap):
+        chunk_words = words[i:i + chunk_size]
+        if chunk_words:
+            chunks.append((" ".join(chunk_words), i))  # include start word index
+    return chunks
+
 # --- Process transcript files ---
 for file in os.listdir(TRANSCRIPTS_DIR):
     if not file.endswith(".txt"):
         continue
 
-    # --- Sanitize ID from filename ---
     base_id = os.path.splitext(file)[0]
-    safe_id = re.sub(r'[^a-zA-Z0-9_-]', '_', base_id)
+    safe_base_id = re.sub(r'[^a-zA-Z0-9_-]', '_', base_id)
 
-    if safe_id in existing_ids:
-        continue
+    with open(os.path.join(TRANSCRIPTS_DIR, file), encoding="utf-8") as f:
+        text = f.read()
 
-    text = open(os.path.join(TRANSCRIPTS_DIR, file), encoding="utf-8").read()
-    embedding = model.encode(text).tolist()
+    chunks = chunk_text(text)
+    for idx, (chunk_text_content, start_word) in enumerate(chunks):
+        chunk_id = f"{safe_base_id}_chunk{idx+1}"
+        if chunk_id in existing_ids:
+            continue
 
-    precomputed.append({
-        "id": safe_id,
-        "text": text,
-        "_vectors": {"all-MiniLM-L6-v2": embedding}
-    })
+        embedding = model.encode(chunk_text_content).tolist()
 
-    print(f"[✓] Prepared {file} -> id={safe_id}")
+        precomputed.append({
+            "id": chunk_id,
+            "file": safe_base_id,
+            "chunk_index": idx+1,
+            "start_word": start_word,
+            "text": chunk_text_content,
+            "_vectors": {"all-MiniLM-L6-v2": embedding}
+        })
 
-# --- Save results ---
+        print(f"[✓] Prepared {file} -> chunk {idx+1}")
+
+# --- Save precomputed chunks ---
 with open(PRECOMPUTED_FILE, "w", encoding="utf-8") as f:
     json.dump(precomputed, f)
 
-print(f"[✓] Wrote {len(precomputed)} documents to {PRECOMPUTED_FILE}")
+print(f"[✓] Wrote {len(precomputed)} chunk documents to {PRECOMPUTED_FILE}")
