@@ -1,3 +1,5 @@
+# # Needed the first time
+# pip install podman-compose
 # # Ensure an Active Systemd User Session
 # # For Podman to function correctly in rootless mode, your user must have an active systemd user session. You can check this by running:
 # loginctl | grep $(whoami)
@@ -6,7 +8,8 @@
 
 # podman network create search-app-net
 podman-compose down
-podman-compose build --no-cache
+# podman-compose build --no-cache
+podman-compose build
 podman-compose up
 # podman-compose build
 # podman-compose up --build
