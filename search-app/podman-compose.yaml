@@ -21,7 +21,7 @@ services:
       - MEILI_URL=http://host.containers.internal:7700
       - MASTER_KEY=MASTER_KEY
       - TRANSCRIPTS_DIR=/transcripts
-      - PRECOMPUTED_FILE=/transcripts/precomputed_transcripts.json
+      - PRECOMPUTED_FILE=/search-app/data/precomputed_transcripts.json
     networks:
       - search-app-net
     volumes:
