@@ -87,7 +87,7 @@ for file in os.listdir(TRANSCRIPTS_DIR):
     embedding = model.encode(text).tolist()
 
     precomputed.append({
-        "id": file,
+        "id": safe_id,
         "text": text,
         "_vectors": {"all-MiniLM-L6-v2": embedding}
     })
