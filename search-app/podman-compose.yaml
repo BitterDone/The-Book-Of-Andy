@@ -21,12 +21,13 @@ services:
       - MEILI_URL=http://host.containers.internal:7700
       - MASTER_KEY=MASTER_KEY
       - TRANSCRIPTS_DIR=/transcripts
-      - PRECOMPUTED_FILE=/search-app/data/precomputed_transcripts.json
+      - PRECOMPUTED_FILE=/data/precomputed_transcripts.json
     networks:
       - search-app-net
     volumes:
       - ../transcripts:/transcripts
       - ./meili_data:/meili_data:Z
+      - ./data:/data    # mount host search-app/data -> /data in container
     depends_on:
       - meilisearch
     command: >
