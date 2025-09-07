@@ -8,6 +8,11 @@
 
 # podman network create search-app-net
 podman-compose down
+
+git pull
+rm -rf meili_data/*
+rm data/precomputed_transcripts.json
+
 # podman-compose build --no-cache
 podman-compose build
 podman-compose up
