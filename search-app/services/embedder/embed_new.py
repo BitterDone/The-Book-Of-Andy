@@ -10,6 +10,7 @@ MEILI_URL = os.environ["MEILI_URL"]
 MASTER_KEY = os.environ["MASTER_KEY"]
 TRANSCRIPTS_DIR = os.environ["TRANSCRIPTS_DIR"]
 PRECOMPUTED_FILE = os.environ["PRECOMPUTED_FILE"]
+VECTOR_SIZE = 384  # size of embedding from all-MiniLM-L6-v2
 
 # --- Verify transcripts directory ---
 if not os.path.exists(TRANSCRIPTS_DIR):
@@ -39,6 +40,16 @@ except MeilisearchApiError:
     )
     
 index = client.index("transcripts")
+
+# --- Register the user-provided embedder ---
+index.update_settings({
+    "embedders": {
+        "all-MiniLM-L6-v2": {
+            "source": "userProvided",
+            "dimensions": VECTOR_SIZE
+        }
+    }
+})
 
 model = SentenceTransformer("all-MiniLM-L6-v2")
 
@@ -80,7 +91,7 @@ for file in os.listdir(TRANSCRIPTS_DIR):
         "text": text,
         "_vectors": {"all-MiniLM-L6-v2": embedding}
     })
-    
+
     print(f"[✓] Prepared {file} -> id={safe_id}")
 
 # --- Save results ---
