@@ -6,30 +6,41 @@ from sentence_transformers import SentenceTransformer
 from meilisearch import Client
 from meilisearch.errors import MeilisearchApiError
 
-MEILI_URL = os.environ["MEILI_URL"]
-MASTER_KEY = os.environ["MASTER_KEY"]
-TRANSCRIPTS_DIR = os.environ["TRANSCRIPTS_DIR"]
+# -------- Config via env --------
+MEILI_URL        = os.environ["MEILI_URL"]
+MASTER_KEY       = os.environ["MASTER_KEY"]
+TRANSCRIPTS_DIR  = os.environ["TRANSCRIPTS_DIR"]
 PRECOMPUTED_FILE = os.environ["PRECOMPUTED_FILE"]
-VECTOR_SIZE = 384  # size of embedding from all-MiniLM-L6-v2
-CHUNK_SIZE = 200    # words per chunk
-OVERLAP = 50        # words overlapping between chunks
 
-# --- Verify transcripts directory ---
+# Vector + chunking params
+EMBEDDER_NAME = "all-MiniLM-L6-v2"
+VECTOR_SIZE   = 384          # dimensions for all-MiniLM-L6-v2
+CHUNK_SIZE    = 200          # words per chunk
+OVERLAP_SIZE  = 20           # words of overlap between chunks
+
+# Batching params to stay under Meili's 95MB request limit
+MAX_BATCH_DOCS = 500                   # hard cap on documents per batch
+MAX_BATCH_BYTES = 80 * 1024 * 1024     # ~80MB safety cap for serialized JSON
+
+# -------- Sanity checks --------
 if not os.path.exists(TRANSCRIPTS_DIR):
     print(f"[✗] ERROR: Transcripts directory not found at {TRANSCRIPTS_DIR}")
-    exit(1)
+    raise SystemExit(1)
 
-txt_files = glob.glob(os.path.join(TRANSCRIPTS_DIR, "*.txt"))
+txt_files = sorted(glob.glob(os.path.join(TRANSCRIPTS_DIR, "*.txt")))
 if not txt_files:
     print(f"[✗] ERROR: No .txt files found in {TRANSCRIPTS_DIR}")
-    exit(1)
+    raise SystemExit(1)
 
 print(f"[✓] Found {len(txt_files)} transcript files in {TRANSCRIPTS_DIR}")
 
-# --- Connect to Meilisearch ---
+# Ensure PRECOMPUTED_FILE parent dir exists (useful if mapped to /search-app/data/)
+os.makedirs(os.path.dirname(PRECOMPUTED_FILE), exist_ok=True)
+
+# -------- Meilisearch client & index --------
 client = Client(MEILI_URL, MASTER_KEY)
 
-# Create the index if it doesn't exist
+# Create index if missing
 try:
     client.get_index("transcripts")
 except MeilisearchApiError:
@@ -37,76 +48,122 @@ except MeilisearchApiError:
 
 index = client.index("transcripts")
 
-# --- Register user-provided embedder ---
+# Register a user-provided embedder (required for pushing your own vectors)
 index.update_settings({
     "embedders": {
-        "all-MiniLM-L6-v2": {
+        EMBEDDER_NAME: {
             "source": "userProvided",
             "dimensions": VECTOR_SIZE
         }
     }
 })
 
-# --- Load embedding model ---
-model = SentenceTransformer("all-MiniLM-L6-v2")
+# -------- Model --------
+model = SentenceTransformer(EMBEDDER_NAME)
 
-# --- Fetch existing documents ---
-existing_docs = index.get_documents({"limit": 10000})
-existing_ids = {doc["id"] for doc in existing_docs.results}
+# -------- Utilities --------
+def sanitize_id(s: str) -> str:
+    """Keep only a-z A-Z 0-9 _ - in IDs."""
+    return re.sub(r"[^a-zA-Z0-9_-]", "_", s)
 
-# --- Load or initialize precomputed JSON ---
-precomputed = []
-if os.path.exists(PRECOMPUTED_FILE) and os.path.getsize(PRECOMPUTED_FILE) > 0:
-    with open(PRECOMPUTED_FILE, "r", encoding="utf-8") as f:
-        try:
-            precomputed = json.load(f)
-        except json.JSONDecodeError:
-            print(f"[!] Warning: {PRECOMPUTED_FILE} was not valid JSON, starting fresh.")
-else:
-    print(f"[!] {PRECOMPUTED_FILE} not found or empty, starting fresh.")
+def chunk_words(words, chunk_size, overlap):
+    """Yield (start_idx, end_idx, text) for overlapping word chunks."""
+    start = 0
+    n = len(words)
+    step = max(1, chunk_size - overlap)  # avoid infinite loop if overlap >= size
+    while start < n:
+        end = min(start + chunk_size, n)
+        yield start, end, " ".join(words[start:end])
+        if end == n:
+            break
+        start += step
 
-# --- Helper: split text into overlapping chunks ---
-def chunk_text(text, chunk_size=CHUNK_SIZE, overlap=OVERLAP):
-    words = text.split()
-    chunks = []
-    for i in range(0, len(words), chunk_size - overlap):
-        chunk_words = words[i:i + chunk_size]
-        if chunk_words:
-            chunks.append((" ".join(chunk_words), i))  # include start word index
-    return chunks
+def approx_json_size(obj) -> int:
+    """Approximate serialized JSON size in bytes for batching decisions."""
+    return len(json.dumps(obj, ensure_ascii=False))
 
-# --- Process transcript files ---
-for file in os.listdir(TRANSCRIPTS_DIR):
-    if not file.endswith(".txt"):
-        continue
+def flush_batch(batch, index, which):
+    if not batch:
+        return
+    index.add_documents(batch)
+    print(f"[✓] Added batch #{which} with {len(batch)} docs")
 
-    base_id = os.path.splitext(file)[0]
-    safe_base_id = re.sub(r'[^a-zA-Z0-9_-]', '_', base_id)
+# -------- Avoid re-adding existing docs --------
+# (If you expect >10k docs, you can paginate here.)
+existing_ids = set()
+try:
+    docs = index.get_documents({"limit": 10000})
+    existing_ids = {doc["id"] for doc in docs.results}
+except MeilisearchApiError:
+    # If index is fresh or empty, that's fine.
+    pass
 
-    with open(os.path.join(TRANSCRIPTS_DIR, file), encoding="utf-8") as f:
+# -------- Main loop: build chunks, embed, batch-upload --------
+all_docs_for_debug = []
+batch = []
+batch_bytes = 2  # for "[]"
+batch_no = 1
+
+for path in txt_files:
+    filename = os.path.basename(path)
+    base_id = os.path.splitext(filename)[0]          # drop .txt
+    safe_base_id = sanitize_id(base_id)
+
+    with open(path, "r", encoding="utf-8") as f:
         text = f.read()
 
-    chunks = chunk_text(text)
-    for idx, (chunk_text_content, start_word) in enumerate(chunks):
-        chunk_id = f"{safe_base_id}_chunk{idx+1}"
-        if chunk_id in existing_ids:
+    words = text.split()
+    chunk_idx = 0
+
+    for start_idx, end_idx, chunk_text in chunk_words(words, CHUNK_SIZE, OVERLAP_SIZE):
+        doc_id = f"{safe_base_id}_chunk{chunk_idx}"
+
+        # Skip if already present
+        if doc_id in existing_ids:
+            chunk_idx += 1
             continue
 
-        embedding = model.encode(chunk_text_content).tolist()
+        # Compute embedding for the chunk
+        embedding = model.encode(chunk_text).tolist()
 
-        precomputed.append({
-            "id": chunk_id,
-            "file": safe_base_id,
-            "chunk_index": idx+1,
-            "start_word": start_word,
-            "text": chunk_text_content,
-            "_vectors": {"all-MiniLM-L6-v2": embedding}
-        })
+        # Meili v1.15 userProvided vectors go under _vectors.<embedderName>
+        doc = {
+            "id": doc_id,
+            "file": filename,
+            "chunk_index": chunk_idx,
+            "word_start": start_idx,
+            "word_end": end_idx,
+            "text": chunk_text,
+            "_vectors": {EMBEDDER_NAME: embedding}
+        }
 
-        print(f"[✓] Prepared {file} -> chunk {idx+1}")
+        # Try to add doc to current batch, respecting both byte and doc caps
+        doc_bytes = approx_json_size(doc)
+        # 1 (comma) margin per doc to be conservative
+        will_exceed_bytes = (batch_bytes + doc_bytes + 1) > MAX_BATCH_BYTES
+        will_exceed_count = (len(batch) + 1) > MAX_BATCH_DOCS
 
-# --- Save precomputed chunks ---
+        if will_exceed_bytes or will_exceed_count:
+            flush_batch(batch, index, batch_no)
+            batch_no += 1
+            batch = []
+            batch_bytes = 2  # "[]"
+
+        batch.append(doc)
+        batch_bytes += doc_bytes + 1
+        all_docs_for_debug.append(doc)
+
+        print(f"[✓] Prepared {filename} -> {doc_id} "
+              f"(words {start_idx}-{end_idx}, batch_bytes≈{batch_bytes})")
+
+        chunk_idx += 1
+
+# Flush any remaining docs
+flush_batch(batch, index, batch_no)
+
+# -------- Persist a copy for debugging/auditing --------
 with open(PRECOMPUTED_FILE, "w", encoding="utf-8") as f:
-    json.dump(precomputed, f)
+    json.dump(all_docs_for_debug, f)
 
-print(f"[✓] Wrote {len(precomputed)} chunk documents to {PRECOMPUTED_FILE}")
+print(f"[✓] Wrote {len(all_docs_for_debug)} chunk-docs to {PRECOMPUTED_FILE}")
+print("[✓] Done.")
