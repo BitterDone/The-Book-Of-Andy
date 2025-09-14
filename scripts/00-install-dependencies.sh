@@ -1,7 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Resolve Could not load library libcudnn_ops_infer.so.8. Error: libcudnn_ops_infer.so.8: cannot open shared object file: No such file or directory
+# https://deeptalk.lambdalabs.com/t/how-to-install-libcudnn-8-ubuntu-20-04-nvidia-smi-460-56-driver-version-460-56-cuda-version-11-2/3138
+# https://stackoverflow.com/questions/66977227/could-not-load-dynamic-library-libcudnn-so-8-when-running-tensorflow-on-ubun
+wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/cuda-ubuntu2004.pin
+sudo mv cuda-ubuntu2004.pin /etc/apt/preferences.d/cuda-repository-pin-600
+export last_public_key=3bf863cc
+sudo apt-key adv --fetch-keys https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/${last_public_key}.pub
+sudo add-apt-repository "deb https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/ /"
 sudo apt-get update
+sudo apt-get install libcudnn8
+sudo apt-get install libcudnn8-dev
 
 # ---- CONFIG ----
 REPO_DIR="$HOME/The-Book-Of-Andy"
