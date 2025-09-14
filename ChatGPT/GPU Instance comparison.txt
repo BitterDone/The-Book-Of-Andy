@@ -1,0 +1,60 @@
+Here’s a breakdown of GPU instances that make sense for medium vs large-v3 WhisperX transcription. I’ll keep this focused on cost/performance since accuracy is fixed once you pick the model size.
+
+⚡ VRAM + Speed Requirements
+
+medium → needs ~5 GB VRAM. Runs well on a T4 (16 GB) or better.
+
+large-v3 → needs ~10–12 GB VRAM. Runs best on A100 (40/80 GB) or H100 (80 GB).
+
+🖥️ Common Cloud GPU Options
+1. NVIDIA T4 (16 GB)
+
+Cheap, widely available.
+
+Handles medium comfortably.
+
+large-v3 may OOM unless quantized (int8).
+
+Best if you want lowest cost per hour and are okay with medium accuracy.
+
+2. NVIDIA L4 (24 GB)
+
+Newer T4 replacement.
+
+Can run large-v3 reliably, though slower than A100/H100.
+
+Solid balance of cost vs VRAM capacity.
+
+3. NVIDIA A100 (40 GB / 80 GB)
+
+High-end.
+
+Easily runs large-v3 at full precision, very fast.
+
+Best throughput → if you’re transcribing many episodes in bulk.
+
+More expensive than T4/L4 but lower cost per transcript because of speed.
+
+4. NVIDIA H100 (80 GB)
+
+Bleeding edge, fastest by far.
+
+Overkill unless you’re transcribing hundreds of hours per day.
+
+Great for enterprise scale, but not necessary for your current pipeline.
+
+💡 Cost/Performance Strategy
+
+If you’re just experimenting → go with a T4 and run medium.
+
+If you want higher accuracy (large-v3) but still care about cost → use an L4.
+
+If you’re doing serious bulk transcription and want speed → choose an A100 (40 GB).
+
+Only use H100 if you need extreme throughput or future-proofing.
+
+👉 For your podcast transcription workflow, I’d suggest:
+
+Prototype/dev → T4 (medium) to keep costs down.
+
+Production/final runs → A100 (large-v3) for accuracy + throughput.

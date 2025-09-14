@@ -14,7 +14,8 @@ import math
 
 # ---- CONFIG ----
 TRANSCRIPTS_DIR = "original_transcripts"
-WHISPER_MODEL = "base"  # tiny, base, small, medium, large
+# Noticed some accuracy issues with diarization on base. Moving to medium. Large-v3 is even better with a strong GPU.
+WHISPER_MODEL = "medium"  # tiny, base, small, medium, large
 DIARIZATION_MODEL = "pyannote/speaker-diarization-3.1"
 
 # Common misheard phrase corrections
@@ -170,6 +171,12 @@ def main():
     print(f"[*] Loading Whisper model: {WHISPER_MODEL}")
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = whisperx.load_model(WHISPER_MODEL, device)
+    # # large-v3 requires ~10 GB VRAM minimum. An A100 (40GB) or H100 is safe.
+    # # medium requires ~5 GB VRAM. Runs fine on cheaper GPUs like T4.
+    # # If out-of-memory errors arise,
+    # # fall back to "base" at WHISPER_MODEL = "medium"
+    # # Or enable compute_type="int8" for quantization:
+    # model = whisperx.load_model(WHISPER_MODEL, device, compute_type="int8")
 
 
     # Parse RSS feed

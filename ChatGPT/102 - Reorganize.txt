@@ -604,7 +604,7 @@
 
     👉 Do you want me to extend this beyond a **static dictionary** and show you how to set up a lightweight **fuzzy matcher** so you don’t have to manually add every mishearing?
 --------------------------------
-
+    Maybe in the future. For now, let's move on to #3 Use "medium" or "large-v3" Whisper model on a stronger GPU
 --------------------------------
 
 --------------------------------
@@ -612,7 +612,7 @@
 --------------------------------
 
 
-Use "medium" or "large-v3" Whisper model on a stronger GPU → much better phrase accuracy.
+
 
 Add suppress_blank=False + ffmpeg apad to keep the intro.
 
