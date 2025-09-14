@@ -915,10 +915,129 @@
 
     Do you want me to do that?
 --------------------------------
+    No, I made the correction. I reran the script and got this error
+    [*] Transcribing without speakers...
+    Could not load library libcudnn_ops_infer.so.8. Error: libcudnn_ops_infer.so.8: cannot open shared object file: No such file or directory
+    scripts/01-run-transcripts.sh: line 92:  4695 Aborted                 "$VENV_DIR/bin/python" "$PY_SCRIPT" --rss "$RSS_URL" --repo "$REPO_DIR" --token "$HF_TOKEN" --diarize "on"
+--------------------------------
+    Ah — that error is **not a Python bug**, it’s a **CUDA/cuDNN runtime issue**. Let’s break it down:
 
+    ---
+
+    ### 1️⃣ What the error means
+
+    ```
+    Could not load library libcudnn_ops_infer.so.8
+    ```
+
+    * Your GPU runtime is trying to use **cuDNN 8**, but it can’t find the library.
+    * cuDNN is NVIDIA’s library for deep learning operations (used by PyTorch, WhisperX, FasterWhisper, etc.).
+    * Without it, GPU-based models will **abort at startup**.
+
+    ---
+
+    ### 2️⃣ Why it happens
+
+    * The Docker image or environment you’re using **doesn’t have the correct cuDNN version** installed.
+    * Possible causes:
+
+    1. GPU driver installed, but cuDNN library missing.
+    2. Using a GPU-enabled Python environment inside a container that lacks cuDNN.
+    3. Mismatch between PyTorch version and installed CUDA/cuDNN.
+
+    ---
+
+    ### 3️⃣ How to fix it
+
+    #### Option A — Install correct cuDNN
+
+    On Ubuntu/Debian:
+
+    ```bash
+    sudo apt-get update
+    sudo apt-get install -y libcudnn8 libcudnn8-dev
+    ```
+
+    * Make sure the version matches your **CUDA driver** (`nvcc --version`).
+    * After installing, verify:
+
+    ```bash
+    ls /usr/lib/x86_64-linux-gnu/libcudnn*
+    ```
+
+    ---
+
+    #### Option B — Use conda to manage CUDA/cuDNN
+
+    ```bash
+    conda install pytorch torchvision torchaudio pytorch-cuda=12.1 -c pytorch -c nvidia
+    ```
+
+    * Conda will pull **matching cuDNN + CUDA** automatically.
+    * Then your Python environment can use GPU without missing libraries.
+
+    ---
+
+    #### Option C — Fall back to CPU (temporary)
+
+    If you just want to run the script to test:
+
+    ```python
+    device = "cpu"
+    model = whisperx.load_model(WHISPER_MODEL, device=device)
+    ```
+
+    * Slower, but avoids GPU / cuDNN issues while debugging.
+
+    ---
+
+    ### 4️⃣ Recommended for you
+
+    1. Check `nvidia-smi` → confirm your GPU driver is installed.
+    2. Install cuDNN 8 (matching your CUDA version).
+    3. Restart Python / your shell / the container.
+
+    Once cuDNN is available, your script should run **large-v3 or medium models on GPU** without errors.
+
+    ---
+
+    If you want, I can give you the **exact commands to fix this on Ubuntu/Debian or in a typical cloud GPU instance** so WhisperX + GPU runs immediately. Do you want me to do that?
 --------------------------------
+    I ran the `ls /usr/lib/x86_64-linux-gnu/libcudnn*` command and got this output: 
+    ls: cannot access '/usr/lib/x86_64-linux-gnu/libcudnn*': No such file or directory
+
+    Give me a snippet of bash code that tests the `ls /usr/lib/x86_64-linux-gnu/libcudnn*` command and runs `sudo apt-get install -y libcudnn8 libcudnn8-dev` if the output is similar to `ls: cannot access '/usr/lib/x86_64-linux-gnu/libcudnn*': No such file or directory`
 --------------------------------
---------------------------------
+    You can use a simple Bash snippet to **check for cuDNN** and install it if missing. Here’s a safe way to do it:
+
+    ```bash
+    #!/usr/bin/env bash
+
+    # Check if libcudnn is installed
+    if ! ls /usr/lib/x86_64-linux-gnu/libcudnn* &>/dev/null; then
+        echo "[*] cuDNN not found. Installing libcudnn8 and libcudnn8-dev..."
+        sudo apt-get update
+        sudo apt-get install -y libcudnn8 libcudnn8-dev
+    else
+        echo "[*] cuDNN already installed."
+    fi
+    ```
+
+    ---
+
+    ### ✅ How it works
+
+    1. `ls /usr/lib/x86_64-linux-gnu/libcudnn* &>/dev/null` → tries to list cuDNN libraries; output suppressed.
+    2. `if ! ...` → triggers the install if the `ls` fails.
+    3. `sudo apt-get update && sudo apt-get install -y libcudnn8 libcudnn8-dev` → installs missing libraries.
+    4. Prints messages so you know if installation was needed.
+
+    ---
+
+    This snippet is **idempotent**, so you can run it multiple times safely.
+
+    Do you want me to also add **a check to verify that the installed cuDNN matches your CUDA version**?
+
 --------------------------------
 --------------------------------
 --------------------------------

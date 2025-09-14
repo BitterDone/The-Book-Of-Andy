@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+sudo apt-get update
+
 # ---- CONFIG ----
 REPO_DIR="$HOME/The-Book-Of-Andy"
 # REPO_URL="https://github.com/BitterDone/The-Book-Of-Andy.git"
@@ -13,12 +15,12 @@ echo "[*] Checking system dependencies..."
 
 if ! command -v ffmpeg >/dev/null 2>&1; then
     echo "[*] Installing ffmpeg..."
-    sudo apt-get update && sudo apt-get install -y ffmpeg
+    sudo apt-get install -y ffmpeg
 fi
 
 # if ! command -v git >/dev/null 2>&1; then
 #     echo "[*] Installing git..."
-#     sudo apt-get update && sudo apt-get install -y git
+#     sudo apt-get install -y git
 # fi
 
 if ! command -v python3 >/dev/null 2>&1; then
@@ -28,7 +30,15 @@ fi
 
 if ! command -v pip3 >/dev/null 2>&1; then
     echo "[*] Installing pip3..."
-    sudo apt-get update && sudo apt-get install -y python3-pip
+    sudo apt-get install -y python3-pip
+fi
+
+# Check if libcudnn is installed
+if ! ls /usr/lib/x86_64-linux-gnu/libcudnn* &>/dev/null; then
+    echo "[*] cuDNN not found. Installing libcudnn8 and libcudnn8-dev..."
+    sudo apt-get install -y libcudnn8 libcudnn8-dev
+else
+    echo "[*] cuDNN already installed."
 fi
 
 # # ---- UPDATE OR CLONE REPO ----

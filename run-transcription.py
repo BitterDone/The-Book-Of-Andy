@@ -219,11 +219,11 @@ def main():
         clean_audio(raw_audio, clean_wav)
 
         if args.diarize.lower() == "on":
-            print(f"[*] Transcribing without speakers...")
+            print(f"[*] Transcribing with speakers...")
             # Full transcription with diarization
             transcript = transcribe_with_speakers(model, clean_wav, args.token, fill_gaps=(args.fill_gaps.lower() == "on"))
         else:
-            print(f"[*] Transcribing with speakers...")
+            print(f"[*] Transcribing without speakers...")
             # Simple transcription without diarization
             transcript = transcribe(model, clean_wav)
 
