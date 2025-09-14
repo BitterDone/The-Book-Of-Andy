@@ -88,3 +88,6 @@ echo "[*] Installing/updating Python packages..."
     ffmpeg \
     git+https://github.com/m-bain/whisperx.git
     # git+https://github.com/openai/whisper.git \ # removed for whisperx for better timestamps
+
+# Need to add huggingface token to this 
+# python3 ../predownload_models.py

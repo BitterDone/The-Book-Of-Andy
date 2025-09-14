@@ -1694,10 +1694,147 @@
     💡 **Bottom line:** Parallelizing at the segment level **reduces alignment time for a single long podcast**. Multi-file parallelization is only needed if you want to process multiple episodes simultaneously.
 
     If you want, I can provide a **ready-to-drop parallelized alignment snippet** that handles a single audio file efficiently and preserves `result_aligned`.
+--------------------------------
+    How can I ensure all large models are fully downloaded in advance to avoid network stalls.
+--------------------------------
+    To avoid stalls during transcription, you want to **pre-download all large models** (Whisper, WhisperX alignment, Wav2Vec2, etc.) and cache them locally before running the full pipeline. Here’s how:
 
+    ---
+
+    ### 1️⃣ Pre-download Whisper / WhisperX models
+
+    #### Python snippet:
+
+    ```python
+    import whisper
+    import whisperx
+    from pyannote.audio import Pipeline
+    import torch
+
+    # Set device (GPU or CPU)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    # ---- Whisper ----
+    print("[*] Preloading Whisper medium model...")
+    model = whisper.load_model("medium")  # or "large-v3", etc.
+
+    # ---- WhisperX alignment ----
+    print("[*] Preloading WhisperX alignment model...")
+    align_model, metadata = whisperx.load_align_model(language_code="en", device=device)
+
+    # ---- Pyannote diarization (if used) ----
+    hf_token = "<YOUR_HF_TOKEN>"
+    print("[*] Preloading Pyannote speaker diarization model...")
+    pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-3.1", use_auth_token=hf_token)
+    ```
+
+    * This ensures all model weights are downloaded and cached in `~/.cache/torch/hub/` (for PyTorch) and Hugging Face cache for Pyannote.
+    * Running this once avoids **network stalls during your main transcription**.
+
+    ---
+
+    ### 2️⃣ Pre-download torchaudio / Wav2Vec2 checkpoints
+
+    Some models (like `wav2vec2_fairseq_base_ls960_asr_ls960.pth`) are downloaded on first alignment.
+
+    ```python
+    import torch
+    import torchaudio
+
+    print("[*] Preloading wav2vec2 ASR model...")
+    torchaudio.pipelines.WAV2VEC2_ASR_BASE_960H.get_model()
+    ```
+
+    * This will download and cache the \~360 MB model before you start alignment.
+
+    ---
+
+    ### 3️⃣ Verify downloads
+
+    * Whisper / WhisperX: `~/.cache/whisper/`
+    * Pyannote: `~/.cache/huggingface/hub/`
+    * Torchaudio: `~/.cache/torch/hub/checkpoints/`
+
+    You can check the files exist and are not corrupted:
+
+    ```bash
+    ls -lh ~/.cache/torch/hub/checkpoints/
+    ls -lh ~/.cache/huggingface/hub/
+    ```
+
+    ---
+
+    ### 4️⃣ Optional: pre-download for offline or production
+
+    * If you want **fully offline transcription**, run the Python snippet once on a machine with network access, then **copy the cache directories** to your deployment machine.
+    * This avoids any runtime downloads completely.
+
+    ---
+
+    ✅ **Bottom line:** Preloading all models before starting transcription ensures **no network delays mid-processing** and makes long podcast runs smoother.
+
+    I can also provide a **small helper script** that pre-downloads **all WhisperX, Whisper, Wav2Vec2, and Pyannote models in one go** if you want. Do you want me to do that?
 --------------------------------
---------------------------------
---------------------------------
+    Here’s an enhanced version of the pre-download script that **caches multiple Whisper models** along with WhisperX alignment, Wav2Vec2, and Pyannote diarization:
+
+    ```python
+    #!/usr/bin/env python3
+    import whisper
+    import whisperx
+    from pyannote.audio import Pipeline
+    import torchaudio
+    import torch
+
+    # ---- Configuration ----
+    WHISPER_MODELS = ["medium", "large-v3"]  # list of Whisper models to preload
+    ALIGNMENT_LANG = "en"
+    DIARIZATION_MODEL = "pyannote/speaker-diarization-3.1"
+    HF_TOKEN = "<YOUR_HUGGINGFACE_TOKEN>"
+
+    # ---- Device selection ----
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"[*] Using device: {device}")
+
+    # ---- 1. Preload Whisper models ----
+    for model_name in WHISPER_MODELS:
+        print(f"[*] Preloading Whisper model '{model_name}'...")
+        whisper.load_model(model_name, device=device)
+        print(f"[✓] Whisper model '{model_name}' cached.")
+
+    # ---- 2. Preload WhisperX alignment model ----
+    print(f"[*] Preloading WhisperX alignment model for language '{ALIGNMENT_LANG}'...")
+    align_model, metadata = whisperx.load_align_model(language_code=ALIGNMENT_LANG, device=device)
+    print("[✓] WhisperX alignment model cached.")
+
+    # ---- 3. Preload Wav2Vec2 ASR model ----
+    print("[*] Preloading Wav2Vec2 ASR model...")
+    torchaudio.pipelines.WAV2VEC2_ASR_BASE_960H.get_model()
+    print("[✓] Wav2Vec2 ASR model cached.")
+
+    # ---- 4. Preload Pyannote speaker diarization ----
+    print(f"[*] Preloading Pyannote diarization model '{DIARIZATION_MODEL}'...")
+    Pipeline.from_pretrained(DIARIZATION_MODEL, use_auth_token=HF_TOKEN)
+    print("[✓] Pyannote diarization model cached.")
+
+    print("[✓] All selected models preloaded and cached. Transcription can now run without network downloads.")
+    ```
+
+    ---
+
+    ### ✅ How it works
+
+    1. Loops over all Whisper models in `WHISPER_MODELS` and caches them.
+    2. Loads WhisperX alignment model for your chosen language.
+    3. Downloads the Wav2Vec2 ASR model used internally.
+    4. Preloads the Pyannote diarization model.
+    5. After running once, all models are stored in the cache, so **future transcriptions don’t need to fetch anything from the network**.
+
+    ---
+
+    Optional: you can add more Whisper models to `WHISPER_MODELS` if you want multiple sizes pre-cached for different runs.
+
+    Do you want me to **also modify this to pre-download multiple Pyannote diarization models** in one run for future flexibility?
+
 --------------------------------
 --------------------------------
 --------------------------------

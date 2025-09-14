@@ -10,3 +10,5 @@ No language specified, language will be first be detected for each audio file (i
 Lightning automatically upgraded your loaded checkpoint from v1.5.4 to v2.5.5. To apply the upgrade to your files permanently, run `python -m pytorch_lightning.utilities.upgrade_checkpoint .venv/lib/python3.10/site-packages/whisperx/assets/pytorch_model.bin`
 Model was trained with pyannote.audio 0.0.1, yours is 3.4.0. Bad things might happen unless you revert pyannote.audio to 0.x.
 Model was trained with torch 1.10.0+cu102, yours is 2.8.0+cu128. Bad things might happen unless you revert torch to 1.x.
+
+You can split the audio into smaller chunks (~5–10 min) and align separately — reduces chance of “stuck” feeling.
