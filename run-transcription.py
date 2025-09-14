@@ -77,7 +77,7 @@ def transcribe_with_speakers(model, audio_file: str, hf_token: str, fill_gaps: b
 
     # Step 2: Load alignment model (language-specific)
     align_model, metadata = whisperx.load_align_model(
-        language_code=res ult["language"], device=device
+        language_code=result["language"], device=device
     )
 
     # Step 3: Perform alignment for accurate word-level timestamps
