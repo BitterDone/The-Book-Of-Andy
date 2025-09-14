@@ -1,0 +1,882 @@
+This seems to work, but I'm confused. Meilisearch had no issue returning the whole transcription before we implemented chunking. Now, submitting a query via curl appears to create a payload that's too big:
+
+[meilisearch] | 2025-09-07T20:47:35.256601Z  WARN HTTP request{method=POST host="host.containers.internal:7700" route=/indexes/transcripts/documents query_parameters= user_agent=Meilisearch Python (v0.37.0) status_code=413 error=The provided payload reached the size limit. The maximum accepted payload size is 95.367431640625 MiB.}: tracing_actix_web::middleware: Error encountered while processing the incoming HTTP request: ResponseError { code: 413, message: "The provided payload reached the size limit. The maximum accepted payload size is 95.367431640625 MiB.", error_code: "payload_too_large", error_type: "invalid_request", error_link: "https://docs.meilisearch.com/errors#payload_too_large" }
+
+--- Separator v4 First 95 MB limit version--------------------
+
+    Perfect — here’s a complete `embed_new.py` that:
+
+    * Reads all transcript `.txt` files
+    * Splits them into **small text chunks** for vectorization
+    * Sanitizes the IDs
+    * Uses **all-MiniLM-L6-v2 embeddings**
+    * Registers the **user-provided embedder**
+    * Uploads documents to Meilisearch in **batches** to avoid payload limits
+    * Saves a `precomputed_transcripts.json` file
+
+    ```python
+    import os
+    import json
+    import glob
+    import re
+    from sentence_transformers import SentenceTransformer
+    from meilisearch import Client
+    from meilisearch.errors import MeilisearchApiError
+
+    MEILI_URL = os.environ["MEILI_URL"]
+    MASTER_KEY = os.environ["MASTER_KEY"]
+    TRANSCRIPTS_DIR = os.environ["TRANSCRIPTS_DIR"]
+    PRECOMPUTED_FILE = os.environ["PRECOMPUTED_FILE"]
+    VECTOR_SIZE = 384  # embedding size for all-MiniLM-L6-v2
+    CHUNK_SIZE = 300  # number of words per chunk
+    BATCH_SIZE = 50   # number of documents per Meilisearch request
+
+    # --- Verify transcripts directory ---
+    if not os.path.exists(TRANSCRIPTS_DIR):
+        print(f"[✗] ERROR: Transcripts directory not found at {TRANSCRIPTS_DIR}")
+        exit(1)
+
+    txt_files = glob.glob(os.path.join(TRANSCRIPTS_DIR, "*.txt"))
+    if not txt_files:
+        print(f"[✗] ERROR: No .txt files found in {TRANSCRIPTS_DIR}")
+        exit(1)
+
+    print(f"[✓] Found {len(txt_files)} transcript files in {TRANSCRIPTS_DIR}")
+
+    # --- Connect to Meilisearch ---
+    client = Client(MEILI_URL, MASTER_KEY)
+
+    # --- Create the index if it doesn't exist ---
+    try:
+        client.get_index("transcripts")
+    except MeilisearchApiError:
+        client.create_index(
+            uid="transcripts",
+            options={"primaryKey": "id"}
+        )
+
+    index = client.index("transcripts")
+
+    # --- Register the user-provided embedder ---
+    index.update_settings({
+        "embedders": {
+            "all-MiniLM-L6-v2": {
+                "source": "userProvided",
+                "dimensions": VECTOR_SIZE
+            }
+        }
+    })
+
+    # --- Load existing documents ---
+    existing_docs = index.get_documents({"limit": 10000})
+    existing_ids = {doc["id"] for doc in existing_docs.results}
+
+    # --- Load or initialize precomputed data ---
+    precomputed = []
+    if os.path.exists(PRECOMPUTED_FILE) and os.path.getsize(PRECOMPUTED_FILE) > 0:
+        with open(PRECOMPUTED_FILE, "r", encoding="utf-8") as f:
+            try:
+                precomputed = json.load(f)
+            except json.JSONDecodeError:
+                print(f"[!] Warning: {PRECOMPUTED_FILE} was not valid JSON, starting fresh.")
+    else:
+        print(f"[!] {PRECOMPUTED_FILE} not found or empty, starting fresh.")
+
+    # --- Load embedding model ---
+    model = SentenceTransformer("all-MiniLM-L6-v2")
+
+    # --- Process transcript files into chunks ---
+    for file in os.listdir(TRANSCRIPTS_DIR):
+        if not file.endswith(".txt"):
+            continue
+
+        base_id = os.path.splitext(file)[0]
+        safe_base_id = re.sub(r'[^a-zA-Z0-9_-]', '_', base_id)
+
+        text = open(os.path.join(TRANSCRIPTS_DIR, file), encoding="utf-8").read()
+        words = text.split()
+        
+        # Split transcript into chunks
+        for i in range(0, len(words), CHUNK_SIZE):
+            chunk_words = words[i:i + CHUNK_SIZE]
+            chunk_text = " ".join(chunk_words)
+            chunk_id = f"{safe_base_id}_{i//CHUNK_SIZE}"
+
+            if chunk_id in existing_ids:
+                continue
+
+            embedding = model.encode(chunk_text).tolist()
+            precomputed.append({
+                "id": chunk_id,
+                "text": chunk_text,
+                "_vectors": {"all-MiniLM-L6-v2": embedding}
+            })
+
+            print(f"[✓] Prepared chunk {chunk_id}")
+
+    # --- Save precomputed chunks to file ---
+    with open(PRECOMPUTED_FILE, "w", encoding="utf-8") as f:
+        json.dump(precomputed, f)
+
+    print(f"[✓] Wrote {len(precomputed)} chunk documents to {PRECOMPUTED_FILE}")
+
+    # --- Upload to Meilisearch in batches ---
+    for i in range(0, len(precomputed), BATCH_SIZE):
+        batch = precomputed[i:i + BATCH_SIZE]
+        try:
+            index.add_documents(batch)
+            print(f"[✓] Uploaded batch {i//BATCH_SIZE + 1} ({len(batch)} documents)")
+        except Exception as e:
+            print(f"[✗] Failed to upload batch {i//BATCH_SIZE + 1}: {e}")
+
+    print(f"[✓] Finished uploading all documents to Meilisearch")
+    ```
+
+    ### ✅ Key Points
+
+    1. **Chunking:** Each transcript is split into chunks of `CHUNK_SIZE` words.
+    2. **Sanitized IDs:** File names and chunk indices are safe for Meilisearch.
+    3. **Embeddings:** Stored under `_vectors.all-MiniLM-L6-v2` for user-provided embedder.
+    4. **Batch Upload:** Prevents the 413 “payload too large” error.
+    5. **Precomputed JSON:** Saved to the path specified in `PRECOMPUTED_FILE`.
+
+    ---
+
+    After running this, you can test Meilisearch with:
+
+    ```bash
+    curl -H "Authorization: Bearer MASTER_KEY" \
+        "http://localhost:7700/indexes/transcripts/documents?limit=5"
+    ```
+
+    Each document returned should now be a **chunk**, not a full transcript, so searches return smaller text pieces.
+
+    ---
+
+    If you want, I can also **add code to return 20 words before and after the match** when searching, so you get contextual snippets instead of the full chunk.
+
+    Do you want me to add that?
+
+--- Separator --------------------
+
+    Why did the overlap feature get removed?
+
+--- Separator Explain removing overlap feature --------------------
+
+    Ah, that makes sense — in the version I just sent you, **we’re splitting transcripts into non-overlapping chunks** of `CHUNK_SIZE` words. That’s why the overlap feature isn’t there anymore.
+
+    Originally, you wanted to provide **some context from previous text** so that a search result could include a little bit of the preceding text. That’s what the `overlap` parameter did: each chunk would share some words with the previous chunk. Removing it just made the code simpler and avoided duplicating embeddings, but it also means **you lose cross-chunk context**.
+
+    If you want to restore it, we can:
+
+    * Add an `OVERLAP_SIZE` variable (e.g., 20–50 words)
+    * When creating chunks, include `OVERLAP_SIZE` words from the end of the previous chunk
+    * Adjust IDs so each chunk is still unique
+
+    This keeps your payloads small but preserves context between chunks, which is usually better for search accuracy.
+
+    Do you want me to modify `embed_new.py` to include overlapping chunks?
+
+--- Separator --------------------
+
+    Yes
+
+--- Separator  v5 Restoring overlap feature --------------------
+
+    Perfect! Here's how we can modify `embed_new.py` to include overlapping chunks while keeping the IDs unique and the embeddings correctly assigned:
+
+    ```python
+    import os
+    import json
+    import glob
+    import re
+    from sentence_transformers import SentenceTransformer
+    from meilisearch import Client
+    from meilisearch.errors import MeilisearchApiError
+
+    MEILI_URL = os.environ["MEILI_URL"]
+    MASTER_KEY = os.environ["MASTER_KEY"]
+    TRANSCRIPTS_DIR = os.environ["TRANSCRIPTS_DIR"]
+    PRECOMPUTED_FILE = os.environ["PRECOMPUTED_FILE"]
+    VECTOR_SIZE = 384  # embedding size from all-MiniLM-L6-v2
+    CHUNK_SIZE = 200   # words per chunk
+    OVERLAP_SIZE = 20  # words to overlap between chunks
+
+    # --- Verify transcripts directory ---
+    if not os.path.exists(TRANSCRIPTS_DIR):
+        print(f"[✗] ERROR: Transcripts directory not found at {TRANSCRIPTS_DIR}")
+        exit(1)
+
+    txt_files = glob.glob(os.path.join(TRANSCRIPTS_DIR, "*.txt"))
+    if not txt_files:
+        print(f"[✗] ERROR: No .txt files found in {TRANSCRIPTS_DIR}")
+        exit(1)
+
+    print(f"[✓] Found {len(txt_files)} transcript files in {TRANSCRIPTS_DIR}")
+
+    client = Client(MEILI_URL, MASTER_KEY)
+
+    # Create the index if it doesn't exist
+    try:
+        client.get_index("transcripts")
+    except MeilisearchApiError:
+        client.create_index(
+            uid="transcripts",
+            options={"primaryKey": "id"}
+        )
+
+    index = client.index("transcripts")
+
+    # --- Register the user-provided embedder ---
+    index.update_settings({
+        "embedders": {
+            "all-MiniLM-L6-v2": {
+                "source": "userProvided",
+                "dimensions": VECTOR_SIZE
+            }
+        }
+    })
+
+    model = SentenceTransformer("all-MiniLM-L6-v2")
+
+    # Fetch existing documents
+    existing_docs = index.get_documents({"limit": 10000})
+    existing_ids = {doc["id"] for doc in existing_docs.results}
+
+    precomputed = []
+    if os.path.exists(PRECOMPUTED_FILE) and os.path.getsize(PRECOMPUTED_FILE) > 0:
+        with open(PRECOMPUTED_FILE, "r", encoding="utf-8") as f:
+            try:
+                precomputed = json.load(f)
+            except json.JSONDecodeError:
+                print(f"[!] Warning: {PRECOMPUTED_FILE} was not valid JSON, starting fresh.")
+    else:
+        print(f"[!] {PRECOMPUTED_FILE} not found or empty, starting fresh.")
+
+    # --- Process transcript files into overlapping chunks ---
+    for file in os.listdir(TRANSCRIPTS_DIR):
+        if not file.endswith(".txt"):
+            continue
+
+        base_id = os.path.splitext(file)[0]
+        safe_base_id = re.sub(r'[^a-zA-Z0-9_-]', '_', base_id)
+
+        text = open(os.path.join(TRANSCRIPTS_DIR, file), encoding="utf-8").read()
+        words = text.split()
+        start = 0
+        chunk_index = 0
+
+        while start < len(words):
+            end = min(start + CHUNK_SIZE, len(words))
+            chunk_words = words[start:end]
+            chunk_text = " ".join(chunk_words)
+            chunk_id = f"{safe_base_id}_chunk{chunk_index}"
+
+            if chunk_id not in existing_ids:
+                embedding = model.encode(chunk_text).tolist()
+                precomputed.append({
+                    "id": chunk_id,
+                    "text": chunk_text,
+                    "_vectors": {"all-MiniLM-L6-v2": embedding}
+                })
+                print(f"[✓] Prepared {file} -> chunk {chunk_index}")
+
+            chunk_index += 1
+            start += CHUNK_SIZE - OVERLAP_SIZE  # move start for next chunk with overlap
+
+    # --- Save results ---
+    with open(PRECOMPUTED_FILE, "w", encoding="utf-8") as f:
+        json.dump(precomputed, f)
+
+    print(f"[✓] Wrote {len(precomputed)} documents to {PRECOMPUTED_FILE}")
+    ```
+
+    ### ✅ Key Changes
+
+    1. Added `CHUNK_SIZE` and `OVERLAP_SIZE`.
+    2. Each transcript is split into **overlapping word chunks**.
+    3. Each chunk gets a **unique ID**: `<filename>_chunk<index>`.
+    4. `_vectors.all-MiniLM-L6-v2` is populated for each chunk.
+    5. Overlap ensures some context is preserved between adjacent chunks.
+
+    With this, you can now:
+
+    * Search for keywords in smaller chunks.
+    * Return only the relevant snippet.
+    * Optionally include `OVERLAP_SIZE` words before/after for context in the search results.
+
+    If you want, I can also show **how to modify your search queries** to return just 20 words before and after the match, which pairs nicely with this chunking.
+
+    Do you want me to do that next?
+
+--- Separator --------------------
+
+    Can you add the batch feature so we stay under Meilisearch's 95 MB limit?
+
+--- Separator --------------------
+
+    Absolutely — we can modify the script to **add documents to Meilisearch in batches**, keeping each batch well below the 95 MB limit. Here’s an updated `embed_new.py` with batching:
+
+    ```python
+    import os
+    import json
+    import glob
+    import re
+    from sentence_transformers import SentenceTransformer
+    from meilisearch import Client
+    from meilisearch.errors import MeilisearchApiError
+
+    MEILI_URL = os.environ["MEILI_URL"]
+    MASTER_KEY = os.environ["MASTER_KEY"]
+    TRANSCRIPTS_DIR = os.environ["TRANSCRIPTS_DIR"]
+    PRECOMPUTED_FILE = os.environ["PRECOMPUTED_FILE"]
+    VECTOR_SIZE = 384        # size of embedding
+    CHUNK_SIZE = 200         # words per chunk
+    OVERLAP_SIZE = 20        # overlap between chunks
+    BATCH_SIZE = 100         # number of documents per batch
+
+    # --- Verify transcripts directory ---
+    if not os.path.exists(TRANSCRIPTS_DIR):
+        print(f"[✗] ERROR: Transcripts directory not found at {TRANSCRIPTS_DIR}")
+        exit(1)
+
+    txt_files = glob.glob(os.path.join(TRANSCRIPTS_DIR, "*.txt"))
+    if not txt_files:
+        print(f"[✗] ERROR: No .txt files found in {TRANSCRIPTS_DIR}")
+        exit(1)
+
+    print(f"[✓] Found {len(txt_files)} transcript files in {TRANSCRIPTS_DIR}")
+
+    client = Client(MEILI_URL, MASTER_KEY)
+
+    # Create the index if it doesn't exist
+    try:
+        client.get_index("transcripts")
+    except MeilisearchApiError:
+        client.create_index(uid="transcripts", options={"primaryKey": "id"})
+
+    index = client.index("transcripts")
+
+    # Register the user-provided embedder
+    index.update_settings({
+        "embedders": {
+            "all-MiniLM-L6-v2": {
+                "source": "userProvided",
+                "dimensions": VECTOR_SIZE
+            }
+        }
+    })
+
+    model = SentenceTransformer("all-MiniLM-L6-v2")
+
+    # Fetch existing documents
+    existing_docs = index.get_documents({"limit": 10000})
+    existing_ids = {doc["id"] for doc in existing_docs.results}
+
+    precomputed = []
+    if os.path.exists(PRECOMPUTED_FILE) and os.path.getsize(PRECOMPUTED_FILE) > 0:
+        with open(PRECOMPUTED_FILE, "r", encoding="utf-8") as f:
+            try:
+                precomputed = json.load(f)
+            except json.JSONDecodeError:
+                print(f"[!] Warning: {PRECOMPUTED_FILE} was not valid JSON, starting fresh.")
+    else:
+        print(f"[!] {PRECOMPUTED_FILE} not found or empty, starting fresh.")
+
+    # --- Process transcript files into overlapping chunks ---
+    for file in os.listdir(TRANSCRIPTS_DIR):
+        if not file.endswith(".txt"):
+            continue
+
+        base_id = os.path.splitext(file)[0]
+        safe_base_id = re.sub(r'[^a-zA-Z0-9_-]', '_', base_id)
+
+        text = open(os.path.join(TRANSCRIPTS_DIR, file), encoding="utf-8").read()
+        words = text.split()
+        start = 0
+        chunk_index = 0
+
+        while start < len(words):
+            end = min(start + CHUNK_SIZE, len(words))
+            chunk_words = words[start:end]
+            chunk_text = " ".join(chunk_words)
+            chunk_id = f"{safe_base_id}_chunk{chunk_index}"
+
+            if chunk_id not in existing_ids:
+                embedding = model.encode(chunk_text).tolist()
+                precomputed.append({
+                    "id": chunk_id,
+                    "text": chunk_text,
+                    "_vectors": {"all-MiniLM-L6-v2": embedding}
+                })
+                print(f"[✓] Prepared {file} -> chunk {chunk_index}")
+
+            chunk_index += 1
+            start += CHUNK_SIZE - OVERLAP_SIZE  # overlap
+
+    # --- Batch add documents ---
+    print(f"[✓] Total chunks to add: {len(precomputed)}")
+    for i in range(0, len(precomputed), BATCH_SIZE):
+        batch = precomputed[i:i+BATCH_SIZE]
+        try:
+            index.add_documents(batch)
+            print(f"[✓] Added batch {i//BATCH_SIZE + 1} ({len(batch)} documents)")
+        except MeilisearchApiError as e:
+            print(f"[✗] Error adding batch {i//BATCH_SIZE + 1}: {e}")
+
+    # --- Save precomputed JSON ---
+    with open(PRECOMPUTED_FILE, "w", encoding="utf-8") as f:
+        json.dump(precomputed, f)
+
+    print(f"[✓] Wrote {len(precomputed)} documents to {PRECOMPUTED_FILE}")
+    ```
+
+    ### ✅ Key Updates:
+
+    1. **`BATCH_SIZE`**: Controls how many documents are added per request.
+    2. **Batch loop**: Uses `index.add_documents(batch)` for each chunk of `BATCH_SIZE`.
+    3. Prevents exceeding **Meilisearch's 95 MB payload limit**.
+    4. Logs which batch is successfully added or if an error occurs.
+
+    ---
+
+    If you want, I can also **automatically adjust `BATCH_SIZE`** based on approximate JSON size per batch to make sure large transcripts never exceed Meilisearch’s 95 MB limit.
+
+    Do you want me to implement that?
+
+--- Separator --------------------
+
+    Here's the embed_new.py script. I'm having a hard time understanding how it achieves these two objectives:
+    - chunk each transcript txt file into overlapping chunks (20 words before the search result and 20 words after) to provide a context window to show the user
+    - stay under meilisearch's 95 mb limit for returning search results
+
+    Can you explain it in a very detailed way and show me the code as you go
+
+--- Separator --------------------
+
+    Totally! Let me break this into two parts: (A) how the design achieves your two goals, and (B) a clear, commented `embed_new.py` you can drop in.
+
+    ---
+
+    # A) How we meet your two goals
+
+    ## 1) “20 words before and after” context with overlapping chunks
+
+    * We split each transcript into **fixed-size word windows** of `CHUNK_SIZE` words (e.g., 200).
+    * We slide the window forward by `CHUNK_SIZE - OVERLAP_SIZE` (with `OVERLAP_SIZE = 20`), so **adjacent chunks overlap by 20 words**.
+    * Why that helps: if a query match lands near the end of chunk *k*, it will likely land near the **beginning** of chunk *k+1* as well, ensuring **at least one chunk** has \~20 words of “look-back” or “look-ahead” context right in the chunk itself.
+    * At **query time**, you tell Meilisearch to **crop** the matched text around the hit:
+
+    * Use `"attributesToCrop": ["text"], "cropLength": 40, "attributesToHighlight": ["text"], "showMatchesPosition": true` in the search body.
+    * That returns a snippet of \~40 words (≈ 20 before + 20 after) centered on the hit, so the user sees the relevant context **without your app returning the entire chunk** every time.
+    * TL;DR: **overlap @ index time** + **crop @ query time** ⇒ “20 before + 20 after” experience.
+
+    Example search:
+
+    ```bash
+    curl -X POST \
+    -H "Authorization: Bearer MASTER_KEY" \
+    -H "Content-Type: application/json" \
+    "http://localhost:7700/indexes/transcripts/search" \
+    --data '{
+        "q": "Biden",
+        "limit": 5,
+        "attributesToRetrieve": ["id", "file", "chunk_index"],
+        "attributesToCrop": ["text"],
+        "cropLength": 40,
+        "attributesToHighlight": ["text"],
+        "showMatchesPosition": true
+    }'
+    ```
+
+    You’ll get `_formatted.text` (with `<em>…</em>` highlights) and `matchesPosition`, so you can show context and/or jump users to the right spot.
+
+    ---
+
+    ## 2) Staying under Meilisearch’s **95 MB request payload limit**
+
+    * The 413 you saw earlier is about **uploading** (ingesting) documents, not search responses.
+    * We avoid that by:
+
+    1. **Chunking** transcripts (documents are smaller).
+    2. **Batching** our `add_documents` calls so each HTTP request is well below 95 MB.
+
+    How batching works here:
+
+    * We maintain a `batch` list and a running **JSON byte size** (`batch_bytes`).
+    * Every time we add a document to the batch, we estimate how many bytes it will add (`len(json.dumps(doc, ensure_ascii=False))`), and if adding it would exceed a safety cap (e.g., **80 MB**), we **flush** (send) the batch, then start a new one.
+    * We also cap the **number of docs per batch** (e.g., 500) so we don’t create ultra-large requests even if docs are tiny.
+
+    ---
+
+    # B) Drop-in `embed_new.py` (chunking + overlap + bounded batches)
+
+    This version:
+
+    * Creates the `transcripts` index with `primaryKey: "id"` if missing.
+    * Registers a **user-provided** embedder (Meilisearch v1.15 vector search with `source: userProvided`).
+    * Splits each file into **overlapping word-chunks** (`CHUNK_SIZE`, `OVERLAP_SIZE`).
+    * Computes an embedding per chunk: `_vectors: { "all-MiniLM-L6-v2": [ ... ] }`.
+    * Batches uploads under \~80 MB (safely under 95 MB), and also by doc count.
+    * Writes the full list to `PRECOMPUTED_FILE` for debugging/auditing.
+
+    ```python
+    import os
+    import re
+    import json
+    import glob
+
+    from sentence_transformers import SentenceTransformer
+    from meilisearch import Client
+    from meilisearch.errors import MeilisearchApiError
+
+    # -------- Config via env --------
+    MEILI_URL        = os.environ["MEILI_URL"]
+    MASTER_KEY       = os.environ["MASTER_KEY"]
+    TRANSCRIPTS_DIR  = os.environ["TRANSCRIPTS_DIR"]
+    PRECOMPUTED_FILE = os.environ["PRECOMPUTED_FILE"]
+
+    # Vector + chunking params
+    EMBEDDER_NAME = "all-MiniLM-L6-v2"
+    VECTOR_SIZE   = 384          # dimensions for all-MiniLM-L6-v2
+    CHUNK_SIZE    = 200          # words per chunk
+    OVERLAP_SIZE  = 20           # words of overlap between chunks
+
+    # Batching params to stay under Meili's 95MB request limit
+    MAX_BATCH_DOCS = 500                   # hard cap on documents per batch
+    MAX_BATCH_BYTES = 80 * 1024 * 1024     # ~80MB safety cap for serialized JSON
+
+    # -------- Sanity checks --------
+    if not os.path.exists(TRANSCRIPTS_DIR):
+        print(f"[✗] ERROR: Transcripts directory not found at {TRANSCRIPTS_DIR}")
+        raise SystemExit(1)
+
+    txt_files = sorted(glob.glob(os.path.join(TRANSCRIPTS_DIR, "*.txt")))
+    if not txt_files:
+        print(f"[✗] ERROR: No .txt files found in {TRANSCRIPTS_DIR}")
+        raise SystemExit(1)
+
+    print(f"[✓] Found {len(txt_files)} transcript files in {TRANSCRIPTS_DIR}")
+
+    # Ensure PRECOMPUTED_FILE parent dir exists (useful if mapped to /search-app/data/)
+    os.makedirs(os.path.dirname(PRECOMPUTED_FILE), exist_ok=True)
+
+    # -------- Meilisearch client & index --------
+    client = Client(MEILI_URL, MASTER_KEY)
+
+    # Create index if missing
+    try:
+        client.get_index("transcripts")
+    except MeilisearchApiError:
+        client.create_index(uid="transcripts", options={"primaryKey": "id"})
+
+    index = client.index("transcripts")
+
+    # Register a user-provided embedder (required for pushing your own vectors)
+    index.update_settings({
+        "embedders": {
+            EMBEDDER_NAME: {
+                "source": "userProvided",
+                "dimensions": VECTOR_SIZE
+            }
+        }
+    })
+
+    # -------- Model --------
+    model = SentenceTransformer(EMBEDDER_NAME)
+
+    # -------- Utilities --------
+    def sanitize_id(s: str) -> str:
+        """Keep only a-z A-Z 0-9 _ - in IDs."""
+        return re.sub(r"[^a-zA-Z0-9_-]", "_", s)
+
+    def chunk_words(words, chunk_size, overlap):
+        """Yield (start_idx, end_idx, text) for overlapping word chunks."""
+        start = 0
+        n = len(words)
+        step = max(1, chunk_size - overlap)  # avoid infinite loop if overlap >= size
+        while start < n:
+            end = min(start + chunk_size, n)
+            yield start, end, " ".join(words[start:end])
+            if end == n:
+                break
+            start += step
+
+    def approx_json_size(obj) -> int:
+        """Approximate serialized JSON size in bytes for batching decisions."""
+        return len(json.dumps(obj, ensure_ascii=False))
+
+    def flush_batch(batch, index, which):
+        if not batch:
+            return
+        index.add_documents(batch)
+        print(f"[✓] Added batch #{which} with {len(batch)} docs")
+
+    # -------- Avoid re-adding existing docs --------
+    # (If you expect >10k docs, you can paginate here.)
+    existing_ids = set()
+    try:
+        docs = index.get_documents({"limit": 10000})
+        existing_ids = {doc["id"] for doc in docs.results}
+    except MeilisearchApiError:
+        # If index is fresh or empty, that's fine.
+        pass
+
+    # -------- Main loop: build chunks, embed, batch-upload --------
+    all_docs_for_debug = []
+    batch = []
+    batch_bytes = 2  # for "[]"
+    batch_no = 1
+
+    for path in txt_files:
+        filename = os.path.basename(path)
+        base_id = os.path.splitext(filename)[0]          # drop .txt
+        safe_base_id = sanitize_id(base_id)
+
+        with open(path, "r", encoding="utf-8") as f:
+            text = f.read()
+
+        words = text.split()
+        chunk_idx = 0
+
+        for start_idx, end_idx, chunk_text in chunk_words(words, CHUNK_SIZE, OVERLAP_SIZE):
+            doc_id = f"{safe_base_id}_chunk{chunk_idx}"
+
+            # Skip if already present
+            if doc_id in existing_ids:
+                chunk_idx += 1
+                continue
+
+            # Compute embedding for the chunk
+            embedding = model.encode(chunk_text).tolist()
+
+            # Meili v1.15 userProvided vectors go under _vectors.<embedderName>
+            doc = {
+                "id": doc_id,
+                "file": filename,
+                "chunk_index": chunk_idx,
+                "word_start": start_idx,
+                "word_end": end_idx,
+                "text": chunk_text,
+                "_vectors": {EMBEDDER_NAME: embedding}
+            }
+
+            # Try to add doc to current batch, respecting both byte and doc caps
+            doc_bytes = approx_json_size(doc)
+            # 1 (comma) margin per doc to be conservative
+            will_exceed_bytes = (batch_bytes + doc_bytes + 1) > MAX_BATCH_BYTES
+            will_exceed_count = (len(batch) + 1) > MAX_BATCH_DOCS
+
+            if will_exceed_bytes or will_exceed_count:
+                flush_batch(batch, index, batch_no)
+                batch_no += 1
+                batch = []
+                batch_bytes = 2  # "[]"
+
+            batch.append(doc)
+            batch_bytes += doc_bytes + 1
+            all_docs_for_debug.append(doc)
+
+            print(f"[✓] Prepared {filename} -> {doc_id} "
+                f"(words {start_idx}-{end_idx}, batch_bytes≈{batch_bytes})")
+
+            chunk_idx += 1
+
+    # Flush any remaining docs
+    flush_batch(batch, index, batch_no)
+
+    # -------- Persist a copy for debugging/auditing --------
+    with open(PRECOMPUTED_FILE, "w", encoding="utf-8") as f:
+        json.dump(all_docs_for_debug, f)
+
+    print(f"[✓] Wrote {len(all_docs_for_debug)} chunk-docs to {PRECOMPUTED_FILE}")
+    print("[✓] Done.")
+    ```
+
+    ---
+
+    ## Query-time tips (so responses are small & on-point)
+
+    * Keep `limit` small (e.g., 5–20) and **crop**:
+
+    ```json
+    {
+    "q": "Biden",
+    "limit": 5,
+    "attributesToRetrieve": ["id", "file", "chunk_index"],
+    "attributesToCrop": ["text"],
+    "cropLength": 40,
+    "attributesToHighlight": ["text"],
+    "showMatchesPosition": true
+    }
+    ```
+
+    * You’ll get lightweight responses: only a 40-word window around each match (≈ 20 before + 20 after), with highlights. No 95 MB issues on the response side.
+
+    ---
+
+    ## Optional: show a timestamp
+
+    If your transcripts include timestamps (e.g., `[00:12:34 - 00:13:01] Speaker: …`), you can:
+
+    * Parse those into a list of (start\_time, end\_time, text) segments before chunking,
+    * Keep a mapping of **word index → approximate time**,
+    * Then store `approx_start_time` in each chunk document to jump the user.
+
+    If you want that, say the word and I’ll wire up a time-aligner for you.
+
+--- Separator --------------------
+
+    Perfect — let’s wire in **timestamps** so every chunk carries an approximate playback position you can send users to.
+
+    ---
+
+    ## 🔹 Where timestamps come from
+
+    Most podcast transcripts look like:
+
+    ```
+    [00:01:23] Host: Welcome to the show…
+    [00:01:30] Guest: Thanks for having me…
+    ```
+
+    That gives us **anchors** (timestamps + word positions). If yours don’t already have inline timestamps, I’ll show a fallback approach (word-to-time scaling).
+
+    ---
+
+    ## 🔹 Strategy
+
+    1. **Parse timestamps** into `(seconds, word_index)` pairs while reading the transcript.
+    2. When chunking, map the **first word index** of a chunk to the nearest timestamp (interpolated if between anchors).
+    3. Store that as `start_time` (and optionally `end_time`).
+    4. Now every search result comes with a `start_time` you can use to deep-link into an audio/video player.
+
+    ---
+
+    ## 🔹 Code changes (building on `embed_new.py`)
+
+    Below I’ll show just the **extras** you’d add. Assume your transcripts are of the `[hh:mm:ss] text` style.
+
+    ```python
+    import re
+
+    # Parse [HH:MM:SS] into seconds
+    def timestamp_to_seconds(ts: str) -> int:
+        h, m, s = map(int, ts.split(":"))
+        return h * 3600 + m * 60 + s
+
+    # Extract anchor points: (time_in_sec, word_index)
+    def extract_anchors(text: str):
+        anchors = []
+        words = []
+        word_index = 0
+        for line in text.splitlines():
+            m = re.match(r"\[(\d{2}:\d{2}:\d{2})\]\s*(.*)", line)
+            if m:
+                ts, content = m.groups()
+                sec = timestamp_to_seconds(ts)
+                anchors.append((sec, word_index))
+                line_words = content.split()
+                words.extend(line_words)
+                word_index += len(line_words)
+            else:
+                line_words = line.split()
+                words.extend(line_words)
+                word_index += len(line_words)
+        return anchors, words
+
+    # Interpolate time for a given word_index using anchors
+    def time_for_word_index(word_idx: int, anchors):
+        if not anchors:
+            return None
+        for i in range(len(anchors) - 1):
+            t0, w0 = anchors[i]
+            t1, w1 = anchors[i + 1]
+            if w0 <= word_idx < w1:
+                # linear interpolate
+                ratio = (word_idx - w0) / (w1 - w0)
+                return int(t0 + ratio * (t1 - t0))
+        # If after last anchor
+        return anchors[-1][0]
+    ```
+
+    ---
+
+    ## 🔹 Inside the chunk loop
+
+    Replace this section in the `embed_new.py` chunk loop:
+
+    ```python
+    words = text.split()
+    chunk_idx = 0
+    for start_idx, end_idx, chunk_text in chunk_words(words, CHUNK_SIZE, OVERLAP_SIZE):
+        ...
+    ```
+
+    with:
+
+    ```python
+    anchors, words = extract_anchors(text)
+    chunk_idx = 0
+
+    for start_idx, end_idx, chunk_text in chunk_words(words, CHUNK_SIZE, OVERLAP_SIZE):
+        start_time = time_for_word_index(start_idx, anchors)
+        end_time   = time_for_word_index(end_idx, anchors)
+
+        doc_id = f"{safe_base_id}_chunk{chunk_idx}"
+
+        if doc_id in existing_ids:
+            chunk_idx += 1
+            continue
+
+        embedding = model.encode(chunk_text).tolist()
+
+        doc = {
+            "id": doc_id,
+            "file": filename,
+            "chunk_index": chunk_idx,
+            "word_start": start_idx,
+            "word_end": end_idx,
+            "start_time": start_time,
+            "end_time": end_time,
+            "text": chunk_text,
+            "_vectors": {EMBEDDER_NAME: embedding}
+        }
+    ```
+
+    ---
+
+    ## 🔹 Result
+
+    Now, when you search, each document includes:
+
+    ```json
+    {
+    "id": "episode1_chunk15",
+    "file": "episode1.txt",
+    "chunk_index": 15,
+    "start_time": 83,
+    "end_time": 95,
+    "text": "…",
+    "_formatted": { "text": "… <em>Biden</em> …" }
+    }
+    ```
+
+    That `start_time: 83` means you can link directly to `?t=83` in YouTube or an `<audio>` player.
+
+    ---
+
+    ✅ This achieves:
+
+    * Chunks that provide overlap for **20 words before/after** context.
+    * Batching to stay under Meilisearch’s **95 MB ingestion limit**.
+    * Each hit has a **start\_time** so you can jump users right into playback.
+
+    ---
+
+    Do your transcripts look like they have `[HH:MM:SS]` style timestamps, or are they just plain text without time markers?
+
+--- Separator --------------------
+--- Separator --------------------
+--- Separator --------------------
+--- Separator --------------------

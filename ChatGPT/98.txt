@@ -1,0 +1,326 @@
+----------------------
+----------------------
+----------------------
+----------------------
+----------------------
+----------------------
+----------------------
+----------------------
+----------------------
+----------------------
+----------------------
+----------------------
+----------------------
+----------------------
+----------------------
+----------------------
+----------------------
+----------------------
+----------------------
+----------------------
+----------------------
+
+----------------------
+    You’ve got two main ways to clear out Meilisearch and start completely fresh:
+
+    ---
+
+    ### 1. **Delete just the `transcripts` index**
+
+    This wipes only your index + docs, but leaves the database and config intact:
+
+    ```bash
+    curl -X DELETE \
+    -H "Authorization: Bearer MASTER_KEY" \
+    http://localhost:7700/indexes/transcripts
+    ```
+
+    After that, your `embed_new.py` will automatically recreate the index the next time it runs.
+
+    ---
+
+    ### 2. **Delete *all* indexes at once**
+
+    Loop through them with curl:
+
+    ```bash
+    curl -s -H "Authorization: Bearer MASTER_KEY" http://localhost:7700/indexes \
+    | jq -r '.results[].uid' \
+    | xargs -I {} curl -X DELETE -H "Authorization: Bearer MASTER_KEY" http://localhost:7700/indexes/{}
+    ```
+
+    (Needs `jq` installed, otherwise you can just copy/paste the `uid`s from the `/indexes` response.)
+
+    ---
+
+    ### 3. **Nuke the database completely**
+
+    If you want a truly fresh Meilisearch (no leftover indexes, tasks, or settings), stop the container and **remove the volume** where the DB is stored.
+    In your setup that’s probably `./meili_data`:
+
+    ```bash
+    podman-compose down
+    rm -rf ./meili_data/*
+    podman-compose up -d
+    ```
+
+    This is the “factory reset” option.
+
+    ---
+
+    ⚡ I’d suggest you try **#1 first** (delete just the `transcripts` index) since it’s the least destructive and will let your pipeline rebuild cleanly.
+
+    Do you want me to modify `embed_new.py` so it can optionally **force-reset the index** itself (delete + recreate), instead of you having to run `curl` each time?
+----------------------
+    How do I test if documents were successfully loaded into meilisearch
+----------------------
+    Great question 👍 Once you’ve run `embed_new.py` or `preload_meili.py`, you can confirm the documents actually landed in Meilisearch with a few simple `curl` calls:
+
+    ---
+
+    ### 1. Check index metadata
+
+    See if the index exists and how many docs it reports:
+
+    ```bash
+    curl -H "Authorization: Bearer MASTER_KEY" http://localhost:7700/indexes/transcripts
+    ```
+
+    You should see something like:
+
+    ```json
+    {
+    "uid": "transcripts",
+    "createdAt": "...",
+    "updatedAt": "...",
+    "primaryKey": "id",
+    "numberOfDocuments": 394
+    }
+    ```
+
+    👉 `numberOfDocuments` tells you how many docs are stored.
+
+    ---
+
+    ### 2. Retrieve some documents
+
+    Fetch the first 5 documents:
+
+    ```bash
+    curl -H "Authorization: Bearer MASTER_KEY" \
+    "http://localhost:7700/indexes/transcripts/documents?limit=5"
+    ```
+
+    If things are working, you’ll get back JSON with your transcript text and embeddings:
+
+    ```json
+    {
+    "results": [
+        {
+        "id": "001-podcast-episode-1.txt",
+        "text": "Transcript content...",
+        "embedding": [0.12, -0.34, ...]
+        },
+        ...
+    ],
+    "limit": 5,
+    "total": 394
+    }
+    ```
+
+    ---
+
+    ### 3. Search for text in transcripts
+
+    Test a real query:
+
+    ```bash
+    curl -X POST -H "Authorization: Bearer MASTER_KEY" \
+    -H "Content-Type: application/json" \
+    "http://localhost:7700/indexes/transcripts/search" \
+    --data '{"q": "Biden"}'
+    ```
+
+    This should return any transcripts containing “Biden”.
+
+    ---
+
+    ### 4. Check for failed tasks (if docs aren’t showing up)
+
+    Sometimes documents are rejected (e.g. invalid IDs). Check task status:
+
+    ```bash
+    curl -H "Authorization: Bearer MASTER_KEY" \
+    "http://localhost:7700/tasks?limit=5"
+    ```
+
+    ---
+
+    ⚡ If `numberOfDocuments` is **0**, it means the docs weren’t accepted (maybe bad IDs, invalid JSON, etc.), even if your script thought it loaded them.
+
+    Do you want me to give you a **minimal Python snippet** (instead of curl) so you can quickly check inside the `embedder` container whether the docs are really there?
+----------------------
+    I'm confused. I used the factory reset option by stopping the containers and rm -rf meili_data/*, but I see this log message:
+    [embedder]    | [✓] Preloaded 1182 transcript documents into Meilisearch.
+    I only have 394 text files, which is 1/3 of 1182
+----------------------
+    Ah! That makes sense — the mismatch comes from **how `embed_new.py` builds `precomputed_transcripts.json`**.
+
+    Even if you cleared `meili_data`, your `precomputed_transcripts.json` file **still exists** in the `/search-app/data` volume. The script does this:
+
+    ```python
+    if os.path.exists(PRECOMPUTED_FILE) and os.path.getsize(PRECOMPUTED_FILE) > 0:
+        precomputed = json.load(f)  # loads old entries
+    else:
+        precomputed = []
+    ```
+
+    Then it loops over the transcript files, **skipping any files already in `precomputed`**, and appends new ones. Finally, it writes **all entries back** to the same JSON file and loads them into Meilisearch.
+
+    So if your JSON still had old entries from previous runs (e.g., old transcripts or duplicates), the script will preload them all again — which explains why you saw **1182 documents** instead of 394.
+
+    ---
+
+    ### ✅ How to truly start fresh
+
+    1. Stop containers:
+
+    ```bash
+    podman-compose down
+    ```
+
+    2. Clear Meilisearch data:
+
+    ```bash
+    rm -rf ./meili_data/*
+    ```
+
+    3. Clear the precomputed transcripts JSON:
+
+    ```bash
+    > ./search-app/data/precomputed_transcripts.json
+    ```
+
+    or delete it entirely:
+
+    ```bash
+    rm ./search-app/data/precomputed_transcripts.json
+    ```
+
+    4. Start containers again:
+
+    ```bash
+    podman-compose up --build
+    ```
+
+    Now `embed_new.py` will regenerate `precomputed_transcripts.json` from scratch, and Meilisearch will get exactly **394 documents** (your actual text files).
+
+    ---
+
+    If you want, I can also show a **safe way to make `embed_new.py` always start fresh**, so you don’t have to manually delete the JSON every time. This avoids these inflated counts. Do you want me to do that?
+----------------------
+    It looks like there's a problem with the vectors:
+    [embedder]    | [✓] Preloaded 394 transcript documents into Meilisearch.
+    [meilisearch] | 2025-09-07T19:39:24.434771Z  WARN index_scheduler::scheduler: Batch failed while doing: {"steps":[{"currentStep":"processing tasks","finished":0,"total":2},{"currentStep":"indexing","finished":2,"total":3},{"currentStep":"waiting for extractors","finished":11,"total":16}],"percentage":44.791668}
+    [meilisearch] | 2025-09-07T19:39:24.434908Z ERROR index_scheduler::scheduler: Batch failed Index `transcripts`: While embedding documents for embedder `all-MiniLM-L6-v2`: no vectors provided for document `653__Andy___DJ_CTI__Media_Admits_Biden_Was_Involve___9937dc45a97f_` and at least 99 other document(s)
+    [meilisearch] | - Note: `all-MiniLM-L6-v2` has `source: userProvided`, so documents must provide embeddings as an array in `_vectors.all-MiniLM-L6-v2`.
+----------------------
+
+    Ah — this explains the issue. Meilisearch **v1.15+** now expects **user-provided embeddings** to live in a **special `_vectors` field** inside each document. Simply putting the embedding under `"embedding"` (as you currently do in `embed_new.py`) won’t work.
+
+    For example, each document should look like this for the `"all-MiniLM-L6-v2"` embedder:
+
+    ```json
+    {
+    "id": "653__Andy___DJ_CTI__Media_Admits_Biden_Was_Involve___9937dc45a97f_",
+    "text": "full transcript text...",
+    "_vectors": {
+        "all-MiniLM-L6-v2": [0.012, -0.034, 0.45, ...]  // your 384-dim vector
+    }
+    }
+    ```
+
+    ### How to fix `embed_new.py`
+
+    1. Change the line where you append documents:
+
+    ```python
+    precomputed.append({
+        "id": file,
+        "text": text,
+        "_vectors": {"all-MiniLM-L6-v2": embedding}
+    })
+    ```
+
+    instead of:
+
+    ```python
+    precomputed.append({"id": file, "text": text, "embedding": embedding})
+    ```
+
+    2. That’s it — you don’t need to modify the index settings; the user-provided embedder `"all-MiniLM-L6-v2"` already exists.
+
+    ---
+
+    After that:
+
+    * Clear Meilisearch (delete `meili_data/*`)
+    * Clear `precomputed_transcripts.json`
+    * Restart your containers (`podman-compose up --build`)
+
+    You should then see all documents successfully indexed with embeddings.
+
+    ---
+
+    I can rewrite the full `embed_new.py` with this fix applied so it’s ready to go. Do you want me to do that?
+----------------------
+    I added the change, cleared meilisearch data, and deleted precomputed_transcripts.json, but I don't see a numberOfDocuments key / value when I run 
+    curl -H "Authorization: Bearer MASTER_KEY" http://localhost:7700/indexes/transcripts
+
+    Also, this command
+    curl -H "Authorization: Bearer MASTER_KEY" "http://localhost:7700/indexes/transcripts/documents?limit=5"
+
+    returns {"results":[],"offset":0,"limit":5,"total":0}
+----------------------
+
+    Ah — that makes sense given Meilisearch v1.15+’s behavior with **user-provided embeddings**. Here’s what’s likely happening:
+
+    1. You updated `embed_new.py` to use `_vectors` correctly. ✅
+    2. However, **the `_vectors` field is only used if the embedder is correctly registered in the index settings**. If the index is newly created, you need to **explicitly add the embedder configuration** before indexing documents. Otherwise, Meilisearch ignores the `_vectors` field, resulting in 0 documents being stored.
+
+    With v1.15+:
+
+    * When using `source: userProvided` embedder, you must include the embedder in index settings **before adding documents**.
+    * Each document must have `_vectors["<embedder_name>"]`.
+
+    So the correct workflow is:
+
+    ```python
+    index.update_settings({
+        "embedders": {
+            "all-MiniLM-L6-v2": {
+                "source": "userProvided",
+                "dimensions": 384
+            }
+        }
+    })
+    ```
+
+    Then add your documents with `_vectors["all-MiniLM-L6-v2"]`.
+
+    Without the `embedders` setting, Meilisearch silently ignores `_vectors`, and the documents never appear, which explains why `numberOfDocuments` is 0 and why `documents?limit=5` returns an empty list.
+
+    ---
+
+    If you want, I can provide a **full corrected `embed_new.py`** that:
+
+    1. Creates the index if it doesn’t exist.
+    2. Configures the `all-MiniLM-L6-v2` embedder properly.
+    3. Saves documents with `_vectors`.
+    4. Handles precomputed JSON safely.
+
+    It should work end-to-end with Meilisearch v1.15+.
+
+    Do you want me to do that?
+
+----------------------

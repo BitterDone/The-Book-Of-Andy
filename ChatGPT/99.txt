@@ -1,0 +1,625 @@
+I have that code snippet in my preload_meili.py file. Should I also have it in embed_new.py?
+
+----------------------
+
+    Yes — you **do need it in `embed_new.py`** (or at least make sure the index settings are updated there **before you add any documents**).
+
+    Here’s why:
+
+    * `embed_new.py` is the script that reads the transcripts, generates embeddings, and **writes the documents to Meilisearch** (via the `_vectors` field).
+    * If the embedder isn’t already registered in the index, Meilisearch **ignores the `_vectors` field**. This is why your documents aren’t actually appearing in the index — even though the script says “Preloaded 394 transcript documents.”
+    * `preload_meili.py` runs afterward, but it’s likely only loading documents **from the precomputed JSON**. If `embed_new.py` didn’t properly register the embedder first, nothing will be saved.
+
+    **Bottom line:**
+
+    * Make sure `embed_new.py` does this **before adding any documents**:
+
+    ```python
+    index.update_settings({
+        "embedders": {
+            "all-MiniLM-L6-v2": {
+                "source": "userProvided",
+                "dimensions": 384
+            }
+        }
+    })
+    ```
+
+    Then add each document like this:
+
+    ```python
+    precomputed.append({
+        "id": file,
+        "text": text,
+        "_vectors": {
+            "all-MiniLM-L6-v2": embedding
+        }
+    })
+    ```
+
+    If you want, I can merge all these changes into a **clean, working version of `embed_new.py`** for Meilisearch v1.15+ that will finally populate the index correctly.
+
+----------------------
+
+    Implement the index.update_settings change in this embed_new.py file:
+
+    import os
+    import json
+    import glob
+    import re
+    from sentence_transformers import SentenceTransformer
+    from meilisearch import Client
+    from meilisearch.errors import MeilisearchApiError
+
+    MEILI_URL = os.environ["MEILI_URL"]
+    MASTER_KEY = os.environ["MASTER_KEY"]
+    TRANSCRIPTS_DIR = os.environ["TRANSCRIPTS_DIR"]
+    PRECOMPUTED_FILE = os.environ["PRECOMPUTED_FILE"]
+
+    # --- Verify transcripts directory ---
+    if not os.path.exists(TRANSCRIPTS_DIR):
+        print(f"[✗] ERROR: Transcripts directory not found at {TRANSCRIPTS_DIR}")
+        exit(1)
+
+    txt_files = glob.glob(os.path.join(TRANSCRIPTS_DIR, "*.txt"))
+    if not txt_files:
+        print(f"[✗] ERROR: No .txt files found in {TRANSCRIPTS_DIR}")
+        exit(1)
+
+    print(f"[✓] Found {len(txt_files)} transcript files in {TRANSCRIPTS_DIR}")
+
+    client = Client(MEILI_URL, MASTER_KEY)
+
+    # Create the index if it doesn't exist
+    try:
+        client.get_index("transcripts")
+    except MeilisearchApiError:
+    # if "transcripts" not in [idx["uid"] for idx in client.get_indexes()]:
+    # if "transcripts" not in client.get_indexes():
+        client.create_index(
+            uid="transcripts",
+            options={
+                "primaryKey": "id",   # must match your document field
+            }
+        )
+        
+    index = client.index("transcripts")
+
+    model = SentenceTransformer("all-MiniLM-L6-v2")
+
+    # Check which transcripts already exist in Meilisearch
+    # existing_ids = {doc["id"] for doc in index.get_documents({"limit": 10000})["results"]}
+
+    # Fetch existing documents
+    existing_docs = index.get_documents({"limit": 10000})  # returns DocumentsResults
+    existing_ids = {doc["id"] for doc in existing_docs.results}    # iterate directly
+
+
+    precomputed = []
+    if os.path.exists(PRECOMPUTED_FILE) and os.path.getsize(PRECOMPUTED_FILE) > 0:
+        with open(PRECOMPUTED_FILE, "r", encoding="utf-8") as f:
+            try:
+                precomputed = json.load(f)
+            except json.JSONDecodeError:
+                print(f"[!] Warning: {PRECOMPUTED_FILE} was not valid JSON, starting fresh.")
+    else:
+        print(f"[!] {PRECOMPUTED_FILE} not found or empty, starting fresh.")
+
+    # --- Process transcript files ---
+    for file in os.listdir(TRANSCRIPTS_DIR):
+        if not file.endswith(".txt"):
+            continue
+
+        # --- Sanitize ID from filename ---
+        base_id = os.path.splitext(file)[0]
+        safe_id = re.sub(r'[^a-zA-Z0-9_-]', '_', base_id)
+
+        if safe_id in existing_ids:
+            continue
+
+        text = open(os.path.join(TRANSCRIPTS_DIR, file), encoding="utf-8").read()
+        embedding = model.encode(text).tolist()
+
+        precomputed.append({
+            "id": file,
+            "text": text,
+            "_vectors": {"all-MiniLM-L6-v2": embedding}
+        })
+        
+        print(f"[✓] Prepared {file} -> id={safe_id}")
+
+    # --- Save results ---
+    with open(PRECOMPUTED_FILE, "w", encoding="utf-8") as f:
+        json.dump(precomputed, f)
+
+    print(f"[✓] Wrote {len(precomputed)} documents to {PRECOMPUTED_FILE}")
+
+----------------------
+
+    Here’s your `embed_new.py` updated to **include the `index.update_settings` call** for the `all-MiniLM-L6-v2` embedder before adding any documents. I also adjusted the document IDs to use the sanitized `safe_id` consistently so Meilisearch accepts them:
+
+    ```python
+    import os
+    import json
+    import glob
+    import re
+    from sentence_transformers import SentenceTransformer
+    from meilisearch import Client
+    from meilisearch.errors import MeilisearchApiError
+
+    MEILI_URL = os.environ["MEILI_URL"]
+    MASTER_KEY = os.environ["MASTER_KEY"]
+    TRANSCRIPTS_DIR = os.environ["TRANSCRIPTS_DIR"]
+    PRECOMPUTED_FILE = os.environ["PRECOMPUTED_FILE"]
+
+    # --- Verify transcripts directory ---
+    if not os.path.exists(TRANSCRIPTS_DIR):
+        print(f"[✗] ERROR: Transcripts directory not found at {TRANSCRIPTS_DIR}")
+        exit(1)
+
+    txt_files = glob.glob(os.path.join(TRANSCRIPTS_DIR, "*.txt"))
+    if not txt_files:
+        print(f"[✗] ERROR: No .txt files found in {TRANSCRIPTS_DIR}")
+        exit(1)
+
+    print(f"[✓] Found {len(txt_files)} transcript files in {TRANSCRIPTS_DIR}")
+
+    client = Client(MEILI_URL, MASTER_KEY)
+
+    # --- Create the index if it doesn't exist ---
+    try:
+        client.get_index("transcripts")
+    except MeilisearchApiError:
+        client.create_index(
+            uid="transcripts",
+            options={"primaryKey": "id"}  # must match your document field
+        )
+
+    index = client.index("transcripts")
+
+    # --- Register the user-provided embedder ---
+    index.update_settings({
+        "embedders": {
+            "all-MiniLM-L6-v2": {
+                "source": "userProvided",
+                "dimensions": 384
+            }
+        }
+    })
+
+    model = SentenceTransformer("all-MiniLM-L6-v2")
+
+    # --- Fetch existing documents ---
+    existing_docs = index.get_documents({"limit": 10000})  # returns DocumentsResults
+    existing_ids = {doc["id"] for doc in existing_docs.results}  # iterate directly
+
+    # --- Load precomputed file if it exists ---
+    precomputed = []
+    if os.path.exists(PRECOMPUTED_FILE) and os.path.getsize(PRECOMPUTED_FILE) > 0:
+        with open(PRECOMPUTED_FILE, "r", encoding="utf-8") as f:
+            try:
+                precomputed = json.load(f)
+            except json.JSONDecodeError:
+                print(f"[!] Warning: {PRECOMPUTED_FILE} was not valid JSON, starting fresh.")
+    else:
+        print(f"[!] {PRECOMPUTED_FILE} not found or empty, starting fresh.")
+
+    # --- Process transcript files ---
+    for file in os.listdir(TRANSCRIPTS_DIR):
+        if not file.endswith(".txt"):
+            continue
+
+        # --- Sanitize ID from filename ---
+        base_id = os.path.splitext(file)[0]
+        safe_id = re.sub(r'[^a-zA-Z0-9_-]', '_', base_id)
+
+        if safe_id in existing_ids:
+            continue
+
+        text = open(os.path.join(TRANSCRIPTS_DIR, file), encoding="utf-8").read()
+        embedding = model.encode(text).tolist()
+
+        precomputed.append({
+            "id": safe_id,
+            "text": text,
+            "_vectors": {"all-MiniLM-L6-v2": embedding}
+        })
+
+        print(f"[✓] Prepared {file} -> id={safe_id}")
+
+    # --- Save results ---
+    with open(PRECOMPUTED_FILE, "w", encoding="utf-8") as f:
+        json.dump(precomputed, f)
+
+    print(f"[✓] Wrote {len(precomputed)} documents to {PRECOMPUTED_FILE}")
+    ```
+
+    ✅ **Key changes applied**:
+
+    1. Added `index.update_settings()` **before adding any documents** to register the user-provided embedder.
+    2. `_vectors` field uses the `all-MiniLM-L6-v2` key so Meilisearch knows which vector to index.
+    3. Document IDs are now `safe_id` (sanitized), so Meilisearch won’t reject them.
+
+    This should allow your documents to be **successfully loaded with embeddings**.
+
+    Do you want me to also **update `preload_meili.py`** in the same way so it matches this embedder setup?
+
+----------------------
+
+    It looks like the ID fields still have the ".txt" file extension. Here's the embed_new.py script:
+    import os
+    import json
+    import glob
+    import re
+    from sentence_transformers import SentenceTransformer
+    from meilisearch import Client
+    from meilisearch.errors import MeilisearchApiError
+
+    MEILI_URL = os.environ["MEILI_URL"]
+    MASTER_KEY = os.environ["MASTER_KEY"]
+    TRANSCRIPTS_DIR = os.environ["TRANSCRIPTS_DIR"]
+    PRECOMPUTED_FILE = os.environ["PRECOMPUTED_FILE"]
+    VECTOR_SIZE = 384  # size of embedding from all-MiniLM-L6-v2
+
+    # --- Verify transcripts directory ---
+    if not os.path.exists(TRANSCRIPTS_DIR):
+        print(f"[✗] ERROR: Transcripts directory not found at {TRANSCRIPTS_DIR}")
+        exit(1)
+
+    txt_files = glob.glob(os.path.join(TRANSCRIPTS_DIR, "*.txt"))
+    if not txt_files:
+        print(f"[✗] ERROR: No .txt files found in {TRANSCRIPTS_DIR}")
+        exit(1)
+
+    print(f"[✓] Found {len(txt_files)} transcript files in {TRANSCRIPTS_DIR}")
+
+    client = Client(MEILI_URL, MASTER_KEY)
+
+    # Create the index if it doesn't exist
+    try:
+        client.get_index("transcripts")
+    except MeilisearchApiError:
+    # if "transcripts" not in [idx["uid"] for idx in client.get_indexes()]:
+    # if "transcripts" not in client.get_indexes():
+        client.create_index(
+            uid="transcripts",
+            options={
+                "primaryKey": "id",   # must match your document field
+            }
+        )
+        
+    index = client.index("transcripts")
+
+    # --- Register the user-provided embedder ---
+    index.update_settings({
+        "embedders": {
+            "all-MiniLM-L6-v2": {
+                "source": "userProvided",
+                "dimensions": VECTOR_SIZE
+            }
+        }
+    })
+
+    model = SentenceTransformer("all-MiniLM-L6-v2")
+
+    # Check which transcripts already exist in Meilisearch
+    # existing_ids = {doc["id"] for doc in index.get_documents({"limit": 10000})["results"]}
+
+    # Fetch existing documents
+    existing_docs = index.get_documents({"limit": 10000})  # returns DocumentsResults
+    existing_ids = {doc["id"] for doc in existing_docs.results}    # iterate directly
+
+
+    precomputed = []
+    if os.path.exists(PRECOMPUTED_FILE) and os.path.getsize(PRECOMPUTED_FILE) > 0:
+        with open(PRECOMPUTED_FILE, "r", encoding="utf-8") as f:
+            try:
+                precomputed = json.load(f)
+            except json.JSONDecodeError:
+                print(f"[!] Warning: {PRECOMPUTED_FILE} was not valid JSON, starting fresh.")
+    else:
+        print(f"[!] {PRECOMPUTED_FILE} not found or empty, starting fresh.")
+
+    # --- Process transcript files ---
+    for file in os.listdir(TRANSCRIPTS_DIR):
+        if not file.endswith(".txt"):
+            continue
+
+        # --- Sanitize ID from filename ---
+        base_id = os.path.splitext(file)[0]
+        safe_id = re.sub(r'[^a-zA-Z0-9_-]', '_', base_id)
+
+        if safe_id in existing_ids:
+            continue
+
+        text = open(os.path.join(TRANSCRIPTS_DIR, file), encoding="utf-8").read()
+        embedding = model.encode(text).tolist()
+
+        precomputed.append({
+            "id": file,
+            "text": text,
+            "_vectors": {"all-MiniLM-L6-v2": embedding}
+        })
+
+        print(f"[✓] Prepared {file} -> id={safe_id}")
+
+    # --- Save results ---
+    with open(PRECOMPUTED_FILE, "w", encoding="utf-8") as f:
+        json.dump(precomputed, f)
+
+    print(f"[✓] Wrote {len(precomputed)} documents to {PRECOMPUTED_FILE}")
+
+----------------------
+
+    Ah, I see the issue. You’re **sanitizing the filename to `safe_id`**, but then in the document you’re still setting `"id": file` instead of `"id": safe_id`. That’s why the `.txt` extension is still in the Meilisearch ID, and why some documents might fail indexing.
+
+    Here’s the corrected section of your `embed_new.py`:
+
+    ```python
+    # --- Process transcript files ---
+    for file in os.listdir(TRANSCRIPTS_DIR):
+        if not file.endswith(".txt"):
+            continue
+
+        # --- Sanitize ID from filename ---
+        base_id = os.path.splitext(file)[0]
+        safe_id = re.sub(r'[^a-zA-Z0-9_-]', '_', base_id)
+
+        if safe_id in existing_ids:
+            continue
+
+        text = open(os.path.join(TRANSCRIPTS_DIR, file), encoding="utf-8").read()
+        embedding = model.encode(text).tolist()
+
+        precomputed.append({
+            "id": safe_id,   # <-- use safe_id here, not file
+            "text": text,
+            "_vectors": {"all-MiniLM-L6-v2": embedding}
+        })
+
+        print(f"[✓] Prepared {file} -> id={safe_id}")
+    ```
+
+    ✅ **Change:**
+
+    * `"id": file` → `"id": safe_id`
+
+    This ensures Meilisearch receives valid document IDs (alphanumeric, underscores, hyphens, no `.txt`), which will prevent the `invalid_document_id` errors and allow the vectors to be properly stored.
+
+    After this change, you should:
+
+    1. Clear Meilisearch data (`rm -rf meili_data/*`),
+    2. Delete `precomputed_transcripts.json`,
+    3. Re-run `embed_new.py` to regenerate the file and load documents.
+
+    Do you want me to provide the **full corrected `embed_new.py`** with this fix applied?
+
+----------------------
+
+    Great, it looks like it's working now. 
+
+    This command curl -X POST -H "Authorization: Bearer MASTER_KEY" -H "Content-Type: application/json" "http://localhost:7700/indexes/transcripts/search" --data '{"q": "Biden"}' returns a ton of text, though. It might be a problem that all the transcripts are dumped into a single text file.
+
+    How can I change things so each search result doesn't return the entire transcript? Ultimately, I want to direct the user to the timestamp in the transcript where the search result occurs, and maybe return 20 words before and after for context
+
+----------------------
+    Ah! That makes sense—right now, each transcript is a **single large document**, so Meilisearch returns the full `text` field for every match. To make search results more useful and allow context snippets, you’ll need to **split the transcripts into smaller chunks** when indexing.
+
+    Here’s a strategy:
+
+    ---
+
+    ### 1. Split transcripts into chunks
+
+    * Decide on a chunk size, e.g., **200–300 words** per chunk.
+    * Overlap chunks slightly (e.g., 20–50 words) so search results near boundaries aren’t cut off.
+    * Assign each chunk a unique `id` (like `file_sanitized_chunk1`) and store the chunk's **start timestamp or line number** if you have that information.
+
+    Example:
+
+    ```python
+    def chunk_text(text, chunk_size=200, overlap=50):
+        words = text.split()
+        chunks = []
+        for i in range(0, len(words), chunk_size - overlap):
+            chunk = " ".join(words[i:i + chunk_size])
+            chunks.append(chunk)
+        return chunks
+    ```
+
+    ---
+
+    ### 2. Include metadata for context
+
+    In each chunk document, include:
+
+    ```json
+    {
+    "id": "file_sanitized_chunk1",
+    "file": "file_sanitized",
+    "chunk_index": 1,
+    "text": "The chunk text...",
+    "start_word": 0,     // optional
+    "end_word": 200,     // optional
+    "_vectors": {"all-MiniLM-L6-v2": [...]}
+    }
+    ```
+
+    * `file` and `chunk_index` let you link back to the original transcript.
+    * If you have actual timestamps per word/line, include `start_time` and `end_time`.
+
+    ---
+
+    ### 3. Search and extract context
+
+    * When you search, Meilisearch will return only the matching chunks instead of the whole transcript.
+    * You can then show **a snippet around the match** using Meilisearch’s `highlight` feature:
+
+    ```json
+    {
+    "q": "Biden",
+    "attributesToHighlight": ["text"],
+    "limit": 5
+    }
+    ```
+
+    * Meilisearch will wrap matches in `<em>` tags and return only a portion of the chunk text.
+
+    ---
+
+    ### 4. Advantages
+
+    * Smaller documents → faster vector search and more precise results.
+    * You can direct users to **the timestamp or word index** of the match.
+    * You can return **20 words before/after** by controlling the chunk size and overlap.
+
+    ---
+
+    If you want, I can **rewrite your `embed_new.py`** to automatically split transcripts into chunks with embeddings, ready for Meilisearch. This will directly support search-with-context for your app.
+
+    Do you want me to do that?
+
+----------------------
+    Yes
+
+----------------------
+    Perfect! We'll update `embed_new.py` so that:
+
+    1. Each transcript is split into **chunks** of \~200 words (with \~50-word overlap).
+    2. Each chunk gets a **unique sanitized ID** and metadata linking it back to the file.
+    3. Each chunk gets its **vector embedding** stored under `_vectors` for Meilisearch.
+    4. Precomputed JSON stores chunks so `preload_meili.py` can still use it if needed.
+
+    Here’s a full version of `embed_new.py` with chunking and embeddings:
+
+    ```python
+    import os
+    import json
+    import glob
+    import re
+    from sentence_transformers import SentenceTransformer
+    from meilisearch import Client
+    from meilisearch.errors import MeilisearchApiError
+
+    MEILI_URL = os.environ["MEILI_URL"]
+    MASTER_KEY = os.environ["MASTER_KEY"]
+    TRANSCRIPTS_DIR = os.environ["TRANSCRIPTS_DIR"]
+    PRECOMPUTED_FILE = os.environ["PRECOMPUTED_FILE"]
+    VECTOR_SIZE = 384  # size of embedding from all-MiniLM-L6-v2
+    CHUNK_SIZE = 200    # words per chunk
+    OVERLAP = 50        # words overlapping between chunks
+
+    # --- Verify transcripts directory ---
+    if not os.path.exists(TRANSCRIPTS_DIR):
+        print(f"[✗] ERROR: Transcripts directory not found at {TRANSCRIPTS_DIR}")
+        exit(1)
+
+    txt_files = glob.glob(os.path.join(TRANSCRIPTS_DIR, "*.txt"))
+    if not txt_files:
+        print(f"[✗] ERROR: No .txt files found in {TRANSCRIPTS_DIR}")
+        exit(1)
+
+    print(f"[✓] Found {len(txt_files)} transcript files in {TRANSCRIPTS_DIR}")
+
+    # --- Connect to Meilisearch ---
+    client = Client(MEILI_URL, MASTER_KEY)
+
+    # Create the index if it doesn't exist
+    try:
+        client.get_index("transcripts")
+    except MeilisearchApiError:
+        client.create_index(uid="transcripts", options={"primaryKey": "id"})
+
+    index = client.index("transcripts")
+
+    # --- Register user-provided embedder ---
+    index.update_settings({
+        "embedders": {
+            "all-MiniLM-L6-v2": {
+                "source": "userProvided",
+                "dimensions": VECTOR_SIZE
+            }
+        }
+    })
+
+    # --- Load embedding model ---
+    model = SentenceTransformer("all-MiniLM-L6-v2")
+
+    # --- Fetch existing documents ---
+    existing_docs = index.get_documents({"limit": 10000})
+    existing_ids = {doc["id"] for doc in existing_docs.results}
+
+    # --- Load or initialize precomputed JSON ---
+    precomputed = []
+    if os.path.exists(PRECOMPUTED_FILE) and os.path.getsize(PRECOMPUTED_FILE) > 0:
+        with open(PRECOMPUTED_FILE, "r", encoding="utf-8") as f:
+            try:
+                precomputed = json.load(f)
+            except json.JSONDecodeError:
+                print(f"[!] Warning: {PRECOMPUTED_FILE} was not valid JSON, starting fresh.")
+    else:
+        print(f"[!] {PRECOMPUTED_FILE} not found or empty, starting fresh.")
+
+    # --- Helper: split text into overlapping chunks ---
+    def chunk_text(text, chunk_size=CHUNK_SIZE, overlap=OVERLAP):
+        words = text.split()
+        chunks = []
+        for i in range(0, len(words), chunk_size - overlap):
+            chunk_words = words[i:i + chunk_size]
+            if chunk_words:
+                chunks.append((" ".join(chunk_words), i))  # include start word index
+        return chunks
+
+    # --- Process transcript files ---
+    for file in os.listdir(TRANSCRIPTS_DIR):
+        if not file.endswith(".txt"):
+            continue
+
+        base_id = os.path.splitext(file)[0]
+        safe_base_id = re.sub(r'[^a-zA-Z0-9_-]', '_', base_id)
+
+        with open(os.path.join(TRANSCRIPTS_DIR, file), encoding="utf-8") as f:
+            text = f.read()
+
+        chunks = chunk_text(text)
+        for idx, (chunk_text_content, start_word) in enumerate(chunks):
+            chunk_id = f"{safe_base_id}_chunk{idx+1}"
+            if chunk_id in existing_ids:
+                continue
+
+            embedding = model.encode(chunk_text_content).tolist()
+
+            precomputed.append({
+                "id": chunk_id,
+                "file": safe_base_id,
+                "chunk_index": idx+1,
+                "start_word": start_word,
+                "text": chunk_text_content,
+                "_vectors": {"all-MiniLM-L6-v2": embedding}
+            })
+
+            print(f"[✓] Prepared {file} -> chunk {idx+1} -> id={chunk_id}")
+
+    # --- Save precomputed chunks ---
+    with open(PRECOMPUTED_FILE, "w", encoding="utf-8") as f:
+        json.dump(precomputed, f)
+
+    print(f"[✓] Wrote {len(precomputed)} chunk documents to {PRECOMPUTED_FILE}")
+    ```
+
+    ---
+
+    ### ✅ How this fixes your problem
+
+    * Each chunk is now a **separate document** in Meilisearch.
+    * Searching `"Biden"` will return **individual chunks**, not the whole transcript.
+    * You can show a few words before/after the match or use Meilisearch’s `highlight` feature.
+    * `chunk_index` and `start_word` let you direct the user to **the timestamp or position** in the original transcript.
+
+    ---
+
+    I can also write a **small search snippet** that queries Meilisearch and returns **20 words before/after matches**, so your UI can jump to the right spot in the transcript.
+
+    Do you want me to do that next?
+
+----------------------
