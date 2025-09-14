@@ -1037,7 +1037,144 @@
     This snippet is **idempotent**, so you can run it multiple times safely.
 
     Do you want me to also add **a check to verify that the installed cuDNN matches your CUDA version**?
+--------------------------------
+    I installed libcudnn8 and -dev, and the script is working now. But, it seems it's still inferring the language:
 
+    [*] Loading Whisper model: medium
+    No language specified, language will be first be detected for each audio file (increases inference time).
+    ... other logs ...
+    [*] Cleaning audio...
+    [*] Transcribing with speakers...
+    Detected language: en (1.00) in first 30s of audio...
+
+    Even though I provided the "en" parameter:
+        # Step 2: Load alignment model (language-specific)
+        align_model, metadata = whisperx.load_align_model(
+            # Results in
+            # No language specified, language will be first be detected for each audio file (increases inference time).
+            # language_code=result["language"], device=device
+
+            # Specify English
+            "en", device=device
+        )
+--------------------------------
+    Ah — I see exactly what’s happening. This is actually **two separate things being logged**:
+
+    ---
+
+    ### 1️⃣ Language detection happens **in the Whisper model**, not the alignment model
+
+    * When you run:
+
+    ```python
+    result = model.transcribe(audio_file)
+    ```
+
+    Whisper by default **auto-detects the language** if you don’t provide `language="en"`.
+
+    * That’s why you see the log:
+
+    ```
+    No language specified, language will be first be detected for each audio file...
+    Detected language: en (1.00) in first 30s of audio...
+    ```
+
+    * **Providing `"en"` to `load_align_model()` does not prevent Whisper from detecting language**, because that parameter is only for the **alignment model**, not the initial transcription.
+
+    ---
+
+    ### 2️⃣ How to fix it
+
+    * Explicitly pass `language="en"` to the **Whisper transcription step**, not just to WhisperX alignment:
+
+    ```python
+    result = model.transcribe(
+        audio_file,
+        language="en",                   # force English, skip detection
+        condition_on_previous_text=True,
+        suppress_blank=False
+    )
+    ```
+
+    * Then your alignment step can still use `"en"`:
+
+    ```python
+    align_model, metadata = whisperx.load_align_model(language_code="en", device=device)
+    result_aligned = whisperx.align(result["segments"], align_model, metadata, audio_file, device)
+    ```
+
+    ---
+
+    ### ✅ Outcome
+
+    * **Whisper skips language detection**, which speeds up inference slightly.
+    * WhisperX still aligns using the correct language model.
+    * Logs about “No language specified…” will disappear.
+
+    ---
+
+    If you want, I can show a **small snippet integrating this into your existing `transcribe_with_speakers`** so both transcription and alignment explicitly use English. Do you want me to do that?
+--------------------------------
+    No, I've made the change. What is the "device" parameter supposed to be? I haven't defined it anywhere
+--------------------------------
+    Ah — that’s important. The `device` parameter tells **WhisperX / PyTorch which hardware to run on**.
+
+    ---
+
+    ### 1️⃣ What it can be
+
+    * `"cuda"` → use the first available GPU.
+    * `"cuda:0"` → use GPU 0 specifically.
+    * `"cpu"` → run on the CPU.
+
+    ---
+
+    ### 2️⃣ How to define it
+
+    Before you load the model, you can add:
+
+    ```python
+    import torch
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"[*] Using device: {device}")
+    ```
+
+    * `torch.cuda.is_available()` returns `True` if a GPU is detected.
+    * This way, your script automatically chooses GPU if available, otherwise CPU.
+
+    ---
+
+    ### 3️⃣ How it’s used
+
+    ```python
+    # Load WhisperX model
+    model = whisperx.load_model(WHISPER_MODEL, device)
+
+    # Load alignment model
+    align_model, metadata = whisperx.load_align_model(language_code="en", device=device)
+
+    # Align segments
+    result_aligned = whisperx.align(result["segments"], align_model, metadata, audio_file, device)
+    ```
+
+    * All three steps now use the same `device` variable.
+    * If `device="cuda"`, computations happen on GPU.
+    * If `device="cpu"`, everything runs on CPU (slower, but no GPU required).
+
+    ---
+
+    This ensures that **WhisperX and alignment** are consistently using the correct hardware.
+
+    Do you want me to show the **full integrated snippet** of defining `device` and passing it everywhere in your transcription pipeline?
+
+--------------------------------
+--------------------------------
+--------------------------------
+--------------------------------
+--------------------------------
+--------------------------------
+--------------------------------
 --------------------------------
 --------------------------------
 --------------------------------

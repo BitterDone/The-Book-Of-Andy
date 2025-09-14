@@ -61,7 +61,7 @@ def clean_audio(infile: str, outfile: str):
 def format_time(seconds: float) -> str:
     return str(timedelta(seconds=int(seconds)))
 
-def transcribe_with_speakers(model, audio_file: str, hf_token: str, fill_gaps: bool) -> str:
+def transcribe_with_speakers(model, audio_file: str, hf_token: str, fill_gaps: bool, device: str) -> str:
     """Run Whisper + diarization, keeping Whisper as ground truth timeline,
     and filling diarization gaps with Whisper fallback.
     """
@@ -73,6 +73,7 @@ def transcribe_with_speakers(model, audio_file: str, hf_token: str, fill_gaps: b
     # https://github.com/m-bain/whisperX/blob/2d9ce44329ae73af2520196d31cd14b6192ace44/whisperx/asr.py#L189
     result = model.transcribe(
         audio_file,
+        language="en",
         # condition_on_previous_text=True,
         # suppress_blank=False  # <-- keep even low-energy start
     )
@@ -83,9 +84,7 @@ def transcribe_with_speakers(model, audio_file: str, hf_token: str, fill_gaps: b
         # Results in
         # No language specified, language will be first be detected for each audio file (increases inference time).
         # language_code=result["language"], device=device
-
-        # Specify English
-        "en", device=device
+        language_code="en", device=device
     )
 
     # Step 3: Perform alignment for accurate word-level timestamps
@@ -221,7 +220,7 @@ def main():
         if args.diarize.lower() == "on":
             print(f"[*] Transcribing with speakers...")
             # Full transcription with diarization
-            transcript = transcribe_with_speakers(model, clean_wav, args.token, fill_gaps=(args.fill_gaps.lower() == "on"))
+            transcript = transcribe_with_speakers(model, clean_wav, args.token, fill_gaps=(args.fill_gaps.lower() == "on"), device=device)
         else:
             print(f"[*] Transcribing without speakers...")
             # Simple transcription without diarization
