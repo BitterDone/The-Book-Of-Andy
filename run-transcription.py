@@ -61,7 +61,7 @@ def clean_audio(infile: str, outfile: str):
 def format_time(seconds: float) -> str:
     return str(timedelta(seconds=int(seconds)))
 
-def transcribe_with_speakers(model, audio_file: str, hf_token: str, fill_gaps: bool, device: str) -> str:
+def transcribe_with_speakers(model, audio_file: str, hf_token: str, fill_gaps: bool, device: str, detailed_logging: bool) -> str:
     """Run Whisper + diarization, keeping Whisper as ground truth timeline,
     and filling diarization gaps with Whisper fallback.
     """
@@ -78,7 +78,8 @@ def transcribe_with_speakers(model, audio_file: str, hf_token: str, fill_gaps: b
         # suppress_blank=False  # <-- keep even low-energy start
     )
 
-    print(f"[*] Transcribed, loading alignment model...")
+    if detailed_logging:
+        print(f"[*] Transcribed, loading alignment model...")
     # Step 2: Load alignment model (language-specific)
     align_model, metadata = whisperx.load_align_model(
         # Results in
@@ -92,7 +93,8 @@ def transcribe_with_speakers(model, audio_file: str, hf_token: str, fill_gaps: b
         result["segments"], align_model, metadata, audio_file, device
     )
 
-    print(f"[*] Aligned, performing diarization...")
+    if detailed_logging:
+        print(f"[*] Aligned, performing diarization...")
     # PyAnnote diarization
     pipeline = Pipeline.from_pretrained(DIARIZATION_MODEL, use_auth_token=hf_token)
     diarization = pipeline(audio_file)
@@ -127,7 +129,8 @@ def transcribe_with_speakers(model, audio_file: str, hf_token: str, fill_gaps: b
 
         lines.append(f"[{format_time(start)} - {format_time(end)}] {speaker}: {text}")
 
-    print(f"[*] Diarized, filling gaps...")
+    if detailed_logging:
+        print(f"[*] Diarized, filling gaps...")
     # ---- Option 3 extra: fill diarization gaps that Whisper didn’t cover ----
     # Walk through diarization timeline and insert dummy lines if Whisper missed it.
     if fill_gaps:
@@ -156,10 +159,12 @@ def transcribe_with_speakers(model, audio_file: str, hf_token: str, fill_gaps: b
         h, m, s = map(int, timestamp.split(":"))
         return h * 3600 + m * 60 + s
 
-    print(f"[*] Gapped, sorting by timestamp...")
+    if detailed_logging:
+        print(f"[*] Gapped, sorting by timestamp...")
     lines.sort(key=line_start_time)
 
-    print(f"[*] Sorted, returning from transcribe_with_speakers()")
+    if detailed_logging:
+        print(f"[*] Sorted, returning from transcribe_with_speakers()")
     return apply_corrections("\n".join(lines))
 
 def transcribe(model, audio_file: str) -> str:
@@ -172,6 +177,9 @@ def main():
     warnings.filterwarnings("ignore", category=UserWarning, module="torchaudio")
     warnings.filterwarnings("ignore", category=UserWarning, module="pyannote")
     warnings.filterwarnings("ignore", category=UserWarning, module="speechbrain")
+    
+    # Suppress low-level C++ warnings from PyTorch (like NNPACK)
+    os.environ["TORCH_CPP_LOG_LEVEL"] = "ERROR"
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--rss", required=True, help="Podcast RSS feed URL")
@@ -179,6 +187,7 @@ def main():
     parser.add_argument("--token", required=True, help="Hugging Face token for diarization model")
     parser.add_argument("--diarize", required=True, help="Control speaker diarization (on/off)")
     parser.add_argument("--fill-gaps", default="off", help="Fill diarization gaps with placeholders (on/off)")
+    parser.add_argument("--detailed-logs", default="off", help="Fill diarization gaps with placeholders (on/off)")
     args = parser.parse_args()
 
     # Prepare output directory
@@ -223,7 +232,7 @@ def main():
         if args.diarize.lower() == "on":
             print(f"[*] Transcribing with speakers...")
             # Full transcription with diarization
-            transcript = transcribe_with_speakers(model, clean_wav, args.token, fill_gaps=(args.fill_gaps.lower() == "on"), device=device)
+            transcript = transcribe_with_speakers(model, clean_wav, args.token, fill_gaps=(args.fill_gaps.lower() == "on"), device=device, detailed_logging=True)
         else:
             print(f"[*] Transcribing without speakers...")
             # Simple transcription without diarization

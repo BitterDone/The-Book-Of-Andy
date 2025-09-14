@@ -1167,9 +1167,99 @@
     This ensures that **WhisperX and alignment** are consistently using the correct hardware.
 
     Do you want me to show the **full integrated snippet** of defining `device` and passing it everywhere in your transcription pipeline?
+--------------------------------
+    No, I made the change and it's started working, but I'm seeing this in the logs. The NNPACK error was logged 300 times all at once:
 
+    [*] Transcribing with speakers...
+    Downloading: "https://download.pytorch.org/torchaudio/models/wav2vec2_fairseq_base_ls960_asr_ls960.pth" to /home/ubuntu/.cache/torch/hub/checkpoints/wav2vec2_fairseq_base_ls960_asr_ls960.pth
+    100%|███████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 360M/360M [00:01<00:00, 286MB/s]
+    config.yaml: 100%|███████████████████████████████████████████████████████████████████████████████████████████████████████████████| 469/469 [00:00<00:00, 4.28MB/s]
+    pytorch_model.bin: 100%|█████████████████████████████████████████████████████████████████████████████████████████████████████| 5.91M/5.91M [00:00<00:00, 48.7MB/s]
+    config.yaml: 100%|███████████████████████████████████████████████████████████████████████████████████████████████████████████████| 399/399 [00:00<00:00, 4.11MB/s]
+    pytorch_model.bin: 100%|██████████████████████████████████████████████████████████████████████████████████████████████████████| 26.6M/26.6M [00:00<00:00, 117MB/s]
+    config.yaml: 100%|███████████████████████████████████████████████████████████████████████████████████████████████████████████████| 221/221 [00:00<00:00, 2.09MB/s]
+    [W914 20:58:26.002385975 NNPACK.cpp:56] Could not initialize NNPACK! Reason: Unsupported hardware.
 --------------------------------
---------------------------------
+    Ah — that warning about **NNPACK** is benign in your case. Let me break it down:
+
+    ---
+
+    ### 1️⃣ What it is
+
+    ```
+    [W914 20:58:26.002385975 NNPACK.cpp:56] Could not initialize NNPACK! Reason: Unsupported hardware.
+    ```
+
+    * **NNPACK** is a CPU-acceleration library for PyTorch, mostly used for **fast convolution in CNNs**.
+    * It’s optional. PyTorch will **fall back to normal CPU kernels** if NNPACK isn’t available or not supported by your CPU.
+    * The log repeating 300+ times just means **a loop somewhere is calling a convolution repeatedly**, each time logging the warning.
+
+    ---
+
+    ### 2️⃣ Why it happens now
+
+    * You’re probably running WhisperX with **FasterWhisper or PyTorch on CPU fallback paths**.
+    * Your CPU does not meet the requirements for NNPACK (common on many Intel/AMD CPUs or cloud instances).
+
+    ---
+
+    ### 3️⃣ Effects
+
+    * **No impact on GPU inference.**
+    * **No impact on transcription accuracy.**
+    * Slightly slower CPU fallback if some part of the pipeline runs on CPU, but negligible if you’re primarily using GPU.
+
+    ---
+
+    ### 4️⃣ How to suppress the warning (optional)
+
+    You can silence the log by setting the PyTorch environment variable:
+
+    ```bash
+    export TORCH_CPP_LOG_LEVEL=ERROR
+    ```
+
+    Or in Python:
+
+    ```python
+    import os
+    os.environ["TORCH_CPP_LOG_LEVEL"] = "ERROR"
+    ```
+
+    * This will **hide warnings like NNPACK not available** but still keep other important errors.
+
+    ---
+
+    ✅ **Bottom line:** You can safely ignore it, especially if your transcription is running on GPU.
+
+    ---
+
+    If you want, I can show a **small snippet to suppress this NNPACK warning entirely** while keeping all other PyTorch warnings visible. Do you want me to do that?
+    Here’s a simple way to **suppress just the NNPACK warnings** while leaving other PyTorch warnings visible. You can put this at the **very top of your Python script** (before importing PyTorch or WhisperX):
+
+    ```python
+    import os
+
+    # Suppress low-level C++ warnings from PyTorch (like NNPACK)
+    os.environ["TORCH_CPP_LOG_LEVEL"] = "ERROR"
+
+    # Optional: still see Python warnings
+    import warnings
+    warnings.filterwarnings("default")
+    ```
+
+    ### ✅ How it works
+
+    * `TORCH_CPP_LOG_LEVEL` controls **C++ backend logging** in PyTorch.
+    * `"ERROR"` level will hide NNPACK warnings (`[W...]`) but still show real errors.
+    * Python-level warnings (DeprecationWarning, UserWarning, etc.) are unaffected by this setting.
+
+    ---
+
+    After adding this, your logs should no longer spam NNPACK warnings, while the transcription runs normally on GPU.
+
+    Do you want me to show a **fully integrated top-of-script snippet** including all the environment and warning setup you need for WhisperX + GPU?
+
 --------------------------------
 --------------------------------
 --------------------------------
