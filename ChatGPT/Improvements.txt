@@ -3,10 +3,10 @@ If you want fuzzy correction (like catching “smokin mirrors” too), integrate
  or spaCy with a custom vocabulary.
 Do you want me to extend this beyond a static dictionary and show you how to set up a lightweight fuzzy matcher so you don’t have to manually add every mishearing?
 
-
 [*] Loading Whisper model: medium
 No language specified, language will be first be detected for each audio file (increases inference time).
 >>Performing voice activity detection using Pyannote...
+
 Lightning automatically upgraded your loaded checkpoint from v1.5.4 to v2.5.5. To apply the upgrade to your files permanently, run `python -m pytorch_lightning.utilities.upgrade_checkpoint .venv/lib/python3.10/site-packages/whisperx/assets/pytorch_model.bin`
 Model was trained with pyannote.audio 0.0.1, yours is 3.4.0. Bad things might happen unless you revert pyannote.audio to 0.x.
 Model was trained with torch 1.10.0+cu102, yours is 2.8.0+cu128. Bad things might happen unless you revert torch to 1.x.
