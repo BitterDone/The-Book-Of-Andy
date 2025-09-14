@@ -1259,13 +1259,313 @@
     After adding this, your logs should no longer spam NNPACK warnings, while the transcription runs normally on GPU.
 
     Do you want me to show a **fully integrated top-of-script snippet** including all the environment and warning setup you need for WhisperX + GPU?
+--------------------------------
+    No. I'm worried the script is stuck or something. It logged all those NNPACK warnings and hasn't logged anything else in the last 10 minutes. It also hasn't produced the transcript file 
+--------------------------------
+    Ah — that’s a different issue. The NNPACK warnings themselves **don’t block execution**, but if your script hasn’t produced any output for 10 minutes, it’s likely **stuck or extremely slow** at a particular step. Based on your logs, there are a few possibilities:
 
+    ---
+
+    ### 1️⃣ Likely culprits
+
+    1. **Downloading pretrained models**
+
+    ```
+    Downloading: "https://download.pytorch.org/torchaudio/models/wav2vec2_fairseq_base_ls960_asr_ls960.pth"
+    ```
+
+    * Large models (\~360MB) are downloaded the first time and cached.
+    * If your network is slow or interrupted, it can stall.
+    * Check `~/.cache/torch/hub/checkpoints/` — if the file exists and is complete, it won’t download again.
+
+    2. **WhisperX alignment step**
+
+    ```python
+    result_aligned = whisperx.align(result["segments"], align_model, metadata, audio_file, device)
+    ```
+
+    * Alignment is **CPU-intensive** if you run on CPU, especially for longer podcasts.
+    * GPU helps only for the initial transcription, not for alignment.
+    * A 1-hour episode can take **20–40 minutes on CPU**, depending on your hardware.
+
+    3. **Falling back to CPU**
+
+    * If `device="cpu"` or GPU is busy/not detected, WhisperX + alignment may be extremely slow.
+    * Check with `nvidia-smi` — ensure your GPU is actually being used.
+
+    ---
+
+    ### 2️⃣ How to debug
+
+    1. **Check GPU usage**
+
+    ```bash
+    nvidia-smi
+    ```
+
+    * If GPU memory is 0% and utilization is near 0, the model may be running on CPU.
+
+    2. **Enable verbose logs in alignment**
+
+    ```python
+    result_aligned = whisperx.align(
+        result["segments"],
+        align_model,
+        metadata,
+        audio_file,
+        device,
+        logging=True  # optional if supported
+    )
+    ```
+
+    * Helps you see progress.
+
+    3. **Try a short test clip**
+
+    * Run your script on **first 30–60 seconds** of audio:
+
+    ```bash
+    ffmpeg -t 60 -i full_podcast.wav short_clip.wav
+    ```
+
+    * If that works, the slowdown is likely just **length-dependent CPU alignment**.
+
+    ---
+
+    ### 3️⃣ Recommendations
+
+    * For **long podcasts**, use GPU for WhisperX transcription (you already do) **and consider a machine with more CPU cores** for alignment.
+    * You can **split the audio into smaller chunks** (\~5–10 min) and align separately — reduces chance of “stuck” feeling.
+    * Ensure all large models are **fully downloaded in advance** to avoid network stalls.
+
+    ---
+
+    If you want, I can provide a **short snippet to test whether your script is really stuck or just doing a long alignment**, so you can see progress live. This will prevent you from waiting indefinitely. Do you want me to do that?
 --------------------------------
+    How do I interpret this `nvidia-smi` output?
+    nvidia-smi
+    Sun Sep 14 21:11:33 2025       
+    +-----------------------------------------------------------------------------------------+
+    | NVIDIA-SMI 570.148.08             Driver Version: 570.148.08     CUDA Version: 12.8     |
+    |-----------------------------------------+------------------------+----------------------+
+    | GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+    | Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+    |                                         |                        |               MIG M. |
+    |=========================================+========================+======================|
+    |   0  NVIDIA A100-SXM4-40GB          On  |   00000000:06:00.0 Off |                    0 |
+    | N/A   31C    P0             52W /  400W |    4339MiB /  40960MiB |      0%      Default |
+    |                                         |                        |             Disabled |
+    +-----------------------------------------+------------------------+----------------------+
+                                                                                            
+    +-----------------------------------------------------------------------------------------+
+    | Processes:                                                                              |
+    |  GPU   GI   CI              PID   Type   Process name                        GPU Memory |
+    |        ID   ID                                                               Usage      |
+    |=========================================================================================|
+    |    0   N/A  N/A           12250      C   ...Book-Of-Andy/.venv/bin/python       4330MiB |
+    +-----------------------------------------------------------------------------------------+
 --------------------------------
+    Thanks for sharing the `nvidia-smi` output — let’s interpret it carefully.
+
+    ---
+
+    ### 1️⃣ GPU overview
+
+    ```
+    GPU 0: NVIDIA A100-SXM4-40GB
+    Driver Version: 570.148.08
+    CUDA Version: 12.8
+    Memory Usage: 4339MiB / 40960MiB
+    GPU Utilization: 0%
+    ```
+
+    * **GPU 0**: Your A100 GPU with 40 GB VRAM.
+    * **Memory Usage**: \~4.3 GB out of 40 GB is currently used → your model is loaded.
+    * **GPU Utilization (`GPU-Util`)**: 0% → the GPU is **idle right now**, not actively computing.
+    * **Temperature**: 31 °C → normal.
+
+    ✅ This tells us: your script **has allocated memory on the GPU**, but isn’t currently using it to do computation.
+
+    ---
+
+    ### 2️⃣ Processes section
+
+    ```
+    PID 12250: python → 4330MiB GPU memory
+    ```
+
+    * Your Python script is indeed connected to the GPU and holding memory.
+    * Memory usage matches a medium/large Whisper model.
+    * But `GPU-Util = 0%` means **Whisper isn’t currently performing calculations**, likely because:
+
+    1. It’s waiting on CPU-bound processing (e.g., alignment step in WhisperX).
+    2. It’s blocked on I/O (reading audio, writing cache, or downloading models).
+
+    ---
+
+    ### 3️⃣ What this implies
+
+    * The **transcription step that uses GPU has finished allocating memory**.
+    * The **current delay** is probably the **alignment step**, which runs mostly on CPU.
+    * On a long podcast episode, **WhisperX alignment can take many minutes** and won’t show GPU utilization.
+
+    ---
+
+    ### 4️⃣ What you can do
+
+    1. **Check CPU load**:
+
+    ```bash
+    htop
+    ```
+
+    * If Python is using 100% of a few cores → alignment is working, just slow.
+    * If Python is idle → possibly stuck.
+
+    2. **Test with a short clip** (1–2 min audio):
+
+    ```bash
+    ffmpeg -t 60 -i full_podcast.wav short_clip.wav
+    ```
+
+    * Run the script on `short_clip.wav`.
+    * If that finishes quickly, the issue is **long audio + CPU alignment**, not a stuck process.
+
+    3. **Optional optimization**: split audio into smaller chunks for alignment to **parallelize CPU-heavy steps**.
+
+    ---
+
+    💡 **Bottom line:** The GPU is allocated but idle because WhisperX’s alignment is CPU-bound. So your script isn’t stuck — it’s just waiting on a **long CPU alignment step**.
+
+    ---
+
+    If you want, I can show a **way to monitor progress of alignment live**, so you can see that it’s actually working and not stuck. Do you want me to do that?
 --------------------------------
+    Great — here’s a practical way to **monitor WhisperX alignment progress** live so you can see that it’s actually working and not stuck.
+
+    ---
+
+    ### 1️⃣ Wrap alignment in a progress loop
+
+    WhisperX alignment produces word-level segments. You can **log the progress** as each segment is processed.
+
+    Example:
+
+    ```python
+    import whisperx
+    import time
+
+    # result = transcription segments from Whisper
+    # align_model, metadata = loaded alignment model
+    # audio_file = your WAV file
+    # device = "cuda" or "cpu"
+
+    word_segments = []
+    total_segments = len(result["segments"])
+    print(f"[*] Starting alignment of {total_segments} segments...")
+
+    for i, seg in enumerate(result["segments"]):
+        aligned = whisperx.align([seg], align_model, metadata, audio_file, device)
+        word_segments.extend(aligned["word_segments"])
+        
+        # Print progress every N segments
+        if (i + 1) % 5 == 0 or (i + 1) == total_segments:
+            print(f"    Aligned segment {i + 1}/{total_segments}")
+
+    print("[✓] Alignment complete")
+    ```
+
+    ---
+
+    ### 2️⃣ How this helps
+
+    * You’ll see **segment-by-segment progress** rather than staring at a blank log.
+    * Even on long podcasts, you can tell that the script is actively working.
+    * You can adjust the modulo `(i + 1) % 5` to log more or less frequently.
+
+    ---
+
+    ### 3️⃣ Optional: progress bar with `tqdm`
+
+    For a nicer visualization:
+
+    ```python
+    from tqdm import tqdm
+
+    word_segments = []
+    for seg in tqdm(result["segments"], desc="Aligning segments"):
+        aligned = whisperx.align([seg], align_model, metadata, audio_file, device)
+        word_segments.extend(aligned["word_segments"])
+    ```
+
+    * `tqdm` gives a **progress bar with ETA**, which is great for long episodes.
+    * Shows real-time progress, so you’ll know whether it’s slow alignment or a stuck process.
+
+    ---
+
+    ✅ **Tip:** Alignment is CPU-bound. If you have multiple CPU cores, you could **parallelize segments** to speed it up. But even single-threaded, the above logging will show you live progress.
+
+    ---
+
+    Do you want me to show a **parallelized version** of this alignment loop to make long episodes much faster?
 --------------------------------
+    Don't I still need to populate the result_aligned variable 
+    # Step 3: Perform alignment for accurate word-level timestamps
+        result_aligned = whisperx.align(
+            result["segments"], align_model, metadata, audio_file, device
+        )
+
+    I don't see it in the tqdm snippet:
+
+        word_segments = []
+        for seg in tqdm(result["segments"], desc="Aligning segments"):
+            aligned = whisperx.align([seg], align_model, metadata, audio_file, device)
+            word_segments.extend(aligned["word_segments"])
 --------------------------------
---------------------------------
---------------------------------
+    Exactly — in the `tqdm` snippet I gave, `result_aligned` isn’t being created as a single object; instead, each segment is aligned individually and the word-level results are collected in `word_segments`.
+
+    So if your later code expects `result_aligned["segments"]` and `result_aligned["word_segments"]`, you have a couple of options:
+
+    ---
+
+    ### Option 1 — Build a full `result_aligned` dictionary manually
+
+    ```python
+    from tqdm import tqdm
+
+    word_segments = []
+    aligned_segments = []
+
+    for seg in tqdm(result["segments"], desc="Aligning segments"):
+        aligned = whisperx.align([seg], align_model, metadata, audio_file, device)
+        word_segments.extend(aligned["word_segments"])
+        aligned_segments.append(aligned["segments"][0])  # aligned segment itself
+
+    # Reconstruct result_aligned like WhisperX would return
+    result_aligned = {
+        "segments": aligned_segments,
+        "word_segments": word_segments
+    }
+    ```
+
+    ✅ Now `result_aligned` has the same structure as the original `whisperx.align(result["segments"], ...)` call.
+
+    * `segments` → segment-level info (start, end, text)
+    * `word_segments` → word-level timestamps
+
+    ---
+
+    ### Option 2 — Keep `word_segments` only
+
+    * If your downstream code only uses **word-level timestamps** (for Meilisearch storage), you can just work with `word_segments` and skip `result_aligned`.
+
+    ---
+
+    **Recommendation:** Option 1 is safest — you preserve the expected structure and can replace the original alignment call directly with this chunked + tqdm version.
+
+    ---
+
+    If you want, I can rewrite your **full `transcribe_with_speakers` function** to use this tqdm-aligned, chunked approach, returning a `result_aligned` compatible with the rest of your code. Do you want me to do that?
+
 --------------------------------
 --------------------------------

@@ -12,6 +12,7 @@ from datetime import timedelta
 import warnings
 import math
 import torch
+from tqdm import tqdm
 
 # ---- CONFIG ----
 TRANSCRIPTS_DIR = "original_transcripts"
@@ -88,10 +89,22 @@ def transcribe_with_speakers(model, audio_file: str, hf_token: str, fill_gaps: b
         language_code="en", device=device
     )
 
-    # Step 3: Perform alignment for accurate word-level timestamps
-    result_aligned = whisperx.align(
-        result["segments"], align_model, metadata, audio_file, device
-    )
+# # Use this with TQDM progress bar
+    word_segments = []
+    for seg in tqdm(result["segments"], desc="Aligning segments"):
+        aligned = whisperx.align([seg], align_model, metadata, audio_file, device)
+        word_segments.extend(aligned["word_segments"])
+
+    # Reconstruct result_aligned like WhisperX would return
+    result_aligned = {
+        "word_segments": word_segments
+    }
+
+# # Use this without TQDM progress bar
+    # # Step 3: Perform alignment for accurate word-level timestamps
+    # result_aligned = whisperx.align(
+    #     result["segments"], align_model, metadata, audio_file, device
+    # )
 
     if detailed_logging:
         print(f"[*] Aligned, performing diarization...")
