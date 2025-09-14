@@ -16,6 +16,8 @@ echo "Do you need to accept T/C to access a gated HF model?"
 # https://huggingface.co/pyannote/segmentation-3.0
 # https://huggingface.co/pyannote/speaker-diarization-3.1
 
+# HF_TOKEN=paste_your_token_here
+
 HF_TOKEN_FILE="$HOME/.huggingface/token"
 
 check_hf_auth() {
