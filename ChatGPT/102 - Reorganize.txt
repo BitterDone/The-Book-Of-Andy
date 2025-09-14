@@ -537,7 +537,72 @@
 
     👉 Do you want me to rewrite your `transcribe_with_speakers` function now using WhisperX, so you can just drop it in?
 --------------------------------
+    No, I made the changes. We can review the entire file if we get errors when running it. 
 
+    Let's move on to #2 Add post-correction dictionary for misheard phrases.
+--------------------------------
+    Perfect — let’s add **Step 2: post-correction dictionary** to catch those “smoking mirrors” → “smoke and mirrors” type errors before the transcript is saved.
+
+    ---
+
+    ## 🔧 Implementation
+
+    ### 1. Define a dictionary
+
+    At the top of your script (near config), add something like:
+
+    ```python
+    # Common misheard phrase corrections
+    COMMON_FIXES = {
+        "smoking mirrors": "smoke and mirrors",
+        "jury box": "jewelry box",
+        "booted slow": "booty swole",
+        # add more as you encounter them
+    }
+    ```
+
+    ---
+
+    ### 2. Add a helper function
+
+    ```python
+    def apply_corrections(text: str) -> str:
+        """Apply common misheard phrase corrections to transcript text"""
+        for wrong, right in COMMON_FIXES.items():
+            # case-insensitive replace
+            text = text.replace(wrong, right)
+            text = text.replace(wrong.capitalize(), right.capitalize())
+        return text
+    ```
+
+    ---
+
+    ### 3. Apply before saving
+
+    In **both** transcription paths (`transcribe_with_speakers` and `transcribe`), wrap the final text:
+
+    For diarization path:
+
+    ```python
+    return apply_corrections("\n".join(lines))
+    ```
+
+    For plain transcription:
+
+    ```python
+    return apply_corrections(result["text"])
+    ```
+
+    ---
+
+    ## 🚀 Optional Enhancements
+
+    * Instead of hard-coding, you could keep corrections in a JSON or YAML file and load dynamically.
+    * If you want fuzzy correction (like catching “smokin mirrors” too), integrate [`symspellpy`](https://github.com/mammothb/symspellpy) or spaCy with a custom vocabulary.
+
+    ---
+
+    👉 Do you want me to extend this beyond a **static dictionary** and show you how to set up a lightweight **fuzzy matcher** so you don’t have to manually add every mishearing?
 --------------------------------
 
 --------------------------------
@@ -546,4 +611,12 @@
 
 --------------------------------
 
---------------------------------
+
+Use "medium" or "large-v3" Whisper model on a stronger GPU → much better phrase accuracy.
+
+Add suppress_blank=False + ffmpeg apad to keep the intro.
+
+Instead of hard-coding, you could keep corrections in a JSON or YAML file and load dynamically.
+If you want fuzzy correction (like catching “smokin mirrors” too), integrate symspellpy
+ or spaCy with a custom vocabulary.
+Do you want me to extend this beyond a static dictionary and show you how to set up a lightweight fuzzy matcher so you don’t have to manually add every mishearing?

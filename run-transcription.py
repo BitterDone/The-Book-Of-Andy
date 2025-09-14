@@ -17,6 +17,23 @@ TRANSCRIPTS_DIR = "original_transcripts"
 WHISPER_MODEL = "base"  # tiny, base, small, medium, large
 DIARIZATION_MODEL = "pyannote/speaker-diarization-3.1"
 
+# Common misheard phrase corrections
+COMMON_FIXES = {
+    "smoking mirrors": "smoke and mirrors",
+    "jury box": "jewelry box",
+    "booted slow": "booty swole",
+    "Priscilla": "Frisella",
+    # add more as you encounter them
+}
+
+def apply_corrections(text: str) -> str:
+    """Apply common misheard phrase corrections to transcript text"""
+    for wrong, right in COMMON_FIXES.items():
+        # case-insensitive replace
+        text = text.replace(wrong, right)
+        text = text.replace(wrong.capitalize(), right.capitalize())
+    return text
+
 def hash_guid(guid: str) -> str:
     """Stable short ID from RSS GUID or URL"""
     return hashlib.sha1(guid.encode()).hexdigest()[:12]
@@ -124,12 +141,12 @@ def transcribe_with_speakers(model, audio_file: str, hf_token: str, fill_gaps: b
 
     lines.sort(key=line_start_time)
 
-    return "\n".join(lines)
+    return apply_corrections("\n".join(lines))
 
 def transcribe(model, audio_file: str) -> str:
     """Run Whisper model and return transcript text"""
     result = model.transcribe(audio_file)
-    return result["text"]
+    return apply_corrections(result["text"])
 
 def main():
     warnings.filterwarnings("ignore", category=DeprecationWarning)
