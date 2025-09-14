@@ -274,7 +274,7 @@ def main():
         if args.diarize.lower() == "on":
             print(f"[*] Transcribing with speakers...")
             # Full transcription with diarization
-            transcript = transcribe_with_speakers(model, clean_wav, args.token, fill_gaps=(args.fill_gaps.lower() == "on"), device=device, detailed_logging=True)
+            transcript = transcribe_with_speakers(model, clean_wav, args.token, fill_gaps=(args.fill_gaps.lower() == "on"), device=device, detailed_logging=(args.detailed_logs.lower() == "on"))
         else:
             print(f"[*] Transcribing without speakers...")
             # Simple transcription without diarization
