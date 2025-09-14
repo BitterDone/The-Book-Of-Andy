@@ -56,7 +56,6 @@ source "$VENV_DIR/bin/activate"
 echo "[*] Installing/updating Python packages..."
 "$VENV_DIR/bin/pip" install --upgrade \
     pip \
-    git+https://github.com/openai/whisper.git \
     feedparser \
     requests \
     torch \
@@ -65,4 +64,7 @@ echo "[*] Installing/updating Python packages..."
     faster-whisper \
     librosa \
     soundfile \
-    huggingface_hub
+    huggingface_hub \
+    ffmpeg \
+    git+https://github.com/m-bain/whisperx.git
+    # git+https://github.com/openai/whisper.git \ # removed for whisperx for better timestamps
