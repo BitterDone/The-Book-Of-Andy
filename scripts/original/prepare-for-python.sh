@@ -56,7 +56,6 @@ source "$VENV_DIR/bin/activate"
 echo "[*] Installing/updating Python packages..."
 pip install --upgrade \
     pip \
-    git+https://github.com/openai/whisper.git \
     feedparser \
     requests \
     torch \
@@ -64,7 +63,10 @@ pip install --upgrade \
     huggingface_hub \
     faster-whisper \
     librosa \
-    soundfile
+    soundfile \
+    ffmpeg \
+    git+https://github.com/m-bain/whisperx.git
+    # git+https://github.com/openai/whisper.git \ # removed for whisperx for better timestamps
     
 # ---- CHECK HUGGING FACE AUTH ----
 echo "[*] Checking Hugging Face authentication..."

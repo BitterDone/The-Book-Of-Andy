@@ -6,7 +6,7 @@ import os
 import subprocess
 import feedparser
 import requests
-import whisper
+import whisperx
 from pyannote.audio import Pipeline
 from datetime import timedelta
 import warnings
@@ -43,9 +43,22 @@ def transcribe_with_speakers(model, audio_file: str, hf_token: str, fill_gaps: b
     """Run Whisper + diarization, keeping Whisper as ground truth timeline,
     and filling diarization gaps with Whisper fallback.
     """
+    # Removed whisper in favor of whisperx
+    # # Whisper with timestamps
+    # result = model.transcribe(audio_file, word_timestamps=True)
+    # Step 1: Transcribe with WhisperX
+    result = model.transcribe(audio_file)
 
-    # Whisper with timestamps
-    result = model.transcribe(audio_file, word_timestamps=True)
+    # Step 2: Load alignment model (language-specific)
+    align_model, metadata = whisperx.load_align_model(
+        language_code=res ult["language"], device=device
+    )
+
+    # Step 3: Perform alignment for accurate word-level timestamps
+    result_aligned = whisperx.align(
+        result["segments"], align_model, metadata, audio_file, device
+    )
+
 
     # PyAnnote diarization
     pipeline = Pipeline.from_pretrained(DIARIZATION_MODEL, use_auth_token=hf_token)
@@ -55,10 +68,12 @@ def transcribe_with_speakers(model, audio_file: str, hf_token: str, fill_gaps: b
     last_speaker = "UNKNOWN"
 
     # ---- OPTION 1: Whisper text always kept ----
-    for seg in result["segments"]:
+    # for seg in result["segments"]: # original Whisper segments
+    for seg in result_aligned["segments"]: # new whisperx segments
         start = seg["start"]
         end = seg["end"]
         text = seg["text"].strip()
+
 
         # Find diarization speaker that overlaps this whisper segment
         speaker = None
@@ -136,7 +151,9 @@ def main():
 
     # Load Whisper model once
     print(f"[*] Loading Whisper model: {WHISPER_MODEL}")
-    model = whisper.load_model(WHISPER_MODEL)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model = whisperx.load_model(WHISPER_MODEL, device)
+
 
     # Parse RSS feed
     feed = feedparser.parse(args.rss)
@@ -164,7 +181,7 @@ def main():
         if args.diarize.lower() == "on":
             print(f"[*] Transcribing without speakers...")
             # Full transcription with diarization
-            transcript = transcribe_with_speakers(model, clean_wav, args.token, fill_gaps=(args.fill_gaps.lower() == "on")
+            transcript = transcribe_with_speakers(model, clean_wav, args.token, fill_gaps=(args.fill_gaps.lower() == "on"))
         else:
             print(f"[*] Transcribing with speakers...")
             # Simple transcription without diarization
