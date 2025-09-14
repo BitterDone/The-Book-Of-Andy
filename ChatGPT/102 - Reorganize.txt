@@ -606,17 +606,190 @@
 --------------------------------
     Maybe in the future. For now, let's move on to #3 Use "medium" or "large-v3" Whisper model on a stronger GPU
 --------------------------------
+    Great — let’s tackle **Step 3: Upgrading to a stronger Whisper model (`medium` or `large-v3`)**.
 
+    ---
+
+    ## 🔎 Why this matters
+
+    * The **model size** is the single biggest factor in improving accuracy (especially for tricky phrases, slang, or fast talk).
+    * GPU type doesn’t change accuracy, but a stronger GPU lets you run bigger models **within practical time and memory limits**.
+
+    For example:
+
+    * `base` → fast, lightweight, but weaker language modeling.
+    * `medium` → \~4× bigger, noticeably more accurate.
+    * `large-v3` → SOTA accuracy, but heavy (\~10–12 GB VRAM needed).
+
+    ---
+
+    ## 🔧 Script Changes
+
+    ### 1. Config change
+
+    Right now your script has:
+
+    ```python
+    WHISPER_MODEL = "base"  # tiny, base, small, medium, large
+    ```
+
+    Change it to:
+
+    ```python
+    WHISPER_MODEL = "large-v3"  # or "medium" if you want a balance
+    ```
+
+    WhisperX supports `"large-v3"` directly.
+
+    ---
+
+    ### 2. GPU selection
+
+    In the WhisperX initialization, we already set:
+
+    ```python
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model = whisperx.load_model(WHISPER_MODEL, device)
+    ```
+
+    This is fine — if you run on a cloud GPU with enough VRAM, it’ll automatically use it.
+
+    ---
+
+    ### 3. Memory considerations
+
+    * `large-v3` requires \~10 GB VRAM minimum. An A100 (40GB) or H100 is safe.
+    * `medium` requires \~5 GB VRAM. Runs fine on cheaper GPUs like T4.
+    * If you hit out-of-memory errors:
+
+    * Fall back to `medium`.
+    * Or enable `compute_type="int8"` for quantization:
+
+        ```python
+        model = whisperx.load_model(WHISPER_MODEL, device, compute_type="int8")
+        ```
+
+    ---
+
+    ## ✅ Outcome
+
+    * Accuracy on conversational podcasts will improve a lot.
+    * Misheard idioms and phrases (your earlier examples) should drop significantly even before correction dictionary is applied.
+    * Diarization alignment also works better with higher-quality segments.
+
+    ---
+
+    👉 Do you want me to also recommend **specific GPU instances** (e.g., A100 vs T4 vs H100) for best cost/performance when running `large-v3` vs `medium`?
+--------------------------------
+    Let's continue with #4 Add suppress_blank=False + ffmpeg apad to keep the intro.
+--------------------------------
+    Perfect — let’s tackle **Step 4: capturing the very beginning of the audio**, which fixes the “first 16 seconds missing” problem. We’ll handle it on **two fronts**: WhisperX transcription options and audio preprocessing with `ffmpeg`.
+
+    ---
+
+    ## 1️⃣ WhisperX / Whisper Fix: `suppress_blank=False`
+
+    By default, Whisper suppresses low-confidence segments, which can cut off quiet intros. Setting `suppress_blank=False` prevents this:
+
+    ```python
+    result = model.transcribe(
+        audio_file,
+        word_timestamps=True,
+        condition_on_previous_text=True,
+        suppress_blank=False  # <-- keep even low-energy start
+    )
+    ```
+
+    * `condition_on_previous_text=True` → ensures context is preserved across segments.
+    * `suppress_blank=False` → ensures Whisper doesn’t drop the first seconds of quiet speech or soft music.
+
+    ---
+
+    ## 2️⃣ ffmpeg Fix: `apad` filter
+
+    Sometimes, the very start of audio is silent or soft, and Whisper/X alignment fails. We can **pad the audio** so that even a short intro is processed:
+
+    ```python
+    def clean_audio(infile: str, outfile: str):
+        """Convert audio to mono 16kHz WAV for Whisper, pad start/end to keep intro/outro"""
+        subprocess.run([
+            "ffmpeg", "-y", "-i", infile,
+            "-ac", "1", "-ar", "16000",
+            "-af", "apad=pad_dur=2",  # pad 2 seconds of silence at start and end
+            outfile
+        ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    ```
+
+    * `apad=pad_dur=2` → ensures at least 2 seconds of audio padding at start/end.
+    * This prevents Whisper from missing the very first few words due to soft volume.
+    * You can increase `pad_dur` if intros are longer or quieter.
+
+    ---
+
+    ### ✅ How it fits together
+
+    1. `ffmpeg` pads the audio → guarantees some buffer at the start.
+    2. WhisperX with `suppress_blank=False` → ensures transcription captures even quiet speech.
+    3. Alignment → gives word-level timestamps including the intro.
+
+    ---
+
+    This should completely fix the issue of missing the first \~16 seconds.
+
+    ---
+
+    If you want, I can now **draft a final “all-in-one” snippet** showing the combined changes: WhisperX, post-corrections, large model, suppress\_blank, and padded audio. This would be ready to drop into your script. Do you want me to do that next?
+--------------------------------
+    Since we moved from whisper to whisperx, do I need word_timestamps=True?
+--------------------------------
+    No — when you use **WhisperX**, you don’t need `word_timestamps=True` anymore.
+
+    Here’s why:
+
+    * `word_timestamps=True` is a **Whisper-only option**. It instructs the base Whisper model to output rough word-level timing.
+    * WhisperX **always does forced alignment after transcription**, producing accurate word-level timestamps in `result_aligned["word_segments"]`.
+    * Passing `word_timestamps=True` is **ignored by WhisperX** or can even slightly slow down the initial transcription unnecessarily.
+
+    ---
+
+    ### ✅ What to do
+
+    Replace:
+
+    ```python
+    result = model.transcribe(audio_file, word_timestamps=True, ...)
+    ```
+
+    with:
+
+    ```python
+    result = model.transcribe(audio_file, condition_on_previous_text=True, suppress_blank=False)
+    ```
+
+    Then perform alignment:
+
+    ```python
+    align_model, metadata = whisperx.load_align_model(language_code=result["language"], device=device)
+    result_aligned = whisperx.align(result["segments"], align_model, metadata, audio_file, device)
+    ```
+
+    * Use `result_aligned["word_segments"]` for word-level timestamps.
+    * `result_aligned["segments"]` still gives segment-level text with start/end times.
+
+    ---
+
+    If you want, I can show the **updated `transcribe_with_speakers` function** fully rewritten for WhisperX, including intro capture, post-correction, and large model support — ready to paste in. Do you want me to do that next?
 --------------------------------
 
 --------------------------------
-
-
-
-
-Add suppress_blank=False + ffmpeg apad to keep the intro.
-
+--------------------------------
+--------------------------------
+--------------------------------
 Instead of hard-coding, you could keep corrections in a JSON or YAML file and load dynamically.
 If you want fuzzy correction (like catching “smokin mirrors” too), integrate symspellpy
  or spaCy with a custom vocabulary.
 Do you want me to extend this beyond a static dictionary and show you how to set up a lightweight fuzzy matcher so you don’t have to manually add every mishearing?
+
+
+    no_speech_threshold=0.2,           # reduce false "gaps"
+    logprob_threshold=-1.0             # more aggressive decoding

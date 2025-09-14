@@ -48,10 +48,13 @@ def download_audio(url: str, dest: str):
             f.write(chunk)
 
 def clean_audio(infile: str, outfile: str):
-    """Convert audio to mono 16kHz WAV for Whisper"""
+    """Convert audio to mono 16kHz WAV for Whisper, pad start/end to keep intro/outro"""
     subprocess.run([
         "ffmpeg", "-y", "-i", infile,
-        "-ac", "1", "-ar", "16000", outfile
+        "-ac", "1", "-ar", "16000",
+        "-af", "apad=pad_dur=2",  # pad 2 seconds of silence at start and end
+                                  # increase pad_dur if intros are longer or quieter.
+        outfile
     ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 def format_time(seconds: float) -> str:
@@ -65,7 +68,12 @@ def transcribe_with_speakers(model, audio_file: str, hf_token: str, fill_gaps: b
     # # Whisper with timestamps
     # result = model.transcribe(audio_file, word_timestamps=True)
     # Step 1: Transcribe with WhisperX
-    result = model.transcribe(audio_file)
+    result = model.transcribe(
+        audio_file,
+        condition_on_previous_text=True,
+        suppress_blank=False  # <-- keep even low-energy start
+    )
+
 
     # Step 2: Load alignment model (language-specific)
     align_model, metadata = whisperx.load_align_model(
