@@ -87,4 +87,4 @@ echo "[✓] Hugging Face access to diarization model confirmed."
 
 # ---- RUN TRANSCRIPTION ----
 echo "[*] Running transcription pipeline..."
-"$VENV_DIR/bin/python" "$PY_SCRIPT" --rss "$RSS_URL" --repo "$REPO_DIR" --token "$HF_TOKEN" --diarize "off"
+"$VENV_DIR/bin/python" "$PY_SCRIPT" --rss "$RSS_URL" --repo "$REPO_DIR" --token "$HF_TOKEN" --diarize "on"
