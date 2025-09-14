@@ -856,7 +856,70 @@
     5. post-correction dictionary
 
     …ready to drop into your script. This would implement all four of our improvements. Do you want me to do that next?
+--------------------------------
+    No, I've made those changes and started to run the script, but I got this error:
+    TypeError: FasterWhisperPipeline.transcribe() got an unexpected keyword argument 'condition_on_previous_text'
+--------------------------------
+    Ah — that error makes sense. Here’s what’s happening:
 
+    ---
+
+    ### 1️⃣ Reason for the error
+
+    * You switched to **FasterWhisper** (or WhisperX using the FasterWhisper backend), which has a **different API** than OpenAI Whisper.
+    * Parameters like `condition_on_previous_text` and `suppress_blank` are **specific to the original `openai/whisper` Python package**.
+    * FasterWhisper’s `transcribe()` does **not recognize these keyword arguments**, hence the `TypeError`.
+
+    ---
+
+    ### 2️⃣ How to fix it
+
+    #### Option A — Remove unsupported kwargs
+
+    If you’re now using FasterWhisper (or WhisperX with FasterWhisper):
+
+    ```python
+    result = model.transcribe(audio_file)  # no condition_on_previous_text, no suppress_blank
+    ```
+
+    * The downside: You lose some of the “aggressive start capture” and context preservation features from OpenAI Whisper.
+    * You can still **rely on WhisperX alignment** for precise word timestamps.
+
+    #### Option B — Use OpenAI Whisper backend
+
+    * If you want `condition_on_previous_text` + `suppress_blank`, you need to **use `whisper`** as the model backend (not FasterWhisper).
+    * Example:
+
+    ```python
+    import whisper
+    model = whisper.load_model("large-v3")  # or medium
+    result = model.transcribe(
+        audio_file,
+        condition_on_previous_text=True,
+        suppress_blank=False
+    )
+    ```
+
+    * Then feed the segments into WhisperX for alignment.
+
+    ---
+
+    ### 3️⃣ Recommended approach for your podcast pipeline
+
+    * Since you already want **large-v3 / medium models**, **WhisperX + OpenAI Whisper backend** is usually easier and compatible with all the flags we discussed.
+    * Use FasterWhisper only if you **need speed over accuracy** and are okay **without `condition_on_previous_text` and `suppress_blank`**.
+
+    ---
+
+    If you want, I can show a **drop-in replacement snippet** for `transcribe_with_speakers` that works with **FasterWhisper + WhisperX**, without unsupported arguments, while still keeping accurate timestamps and the post-correction dictionary.
+
+    Do you want me to do that?
+--------------------------------
+
+--------------------------------
+--------------------------------
+--------------------------------
+--------------------------------
 --------------------------------
 --------------------------------
 --------------------------------

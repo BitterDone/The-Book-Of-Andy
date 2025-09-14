@@ -69,10 +69,12 @@ def transcribe_with_speakers(model, audio_file: str, hf_token: str, fill_gaps: b
     # # Whisper with timestamps
     # result = model.transcribe(audio_file, word_timestamps=True)
     # Step 1: Transcribe with WhisperX
+    # Documentation:
+    # https://github.com/m-bain/whisperX/blob/2d9ce44329ae73af2520196d31cd14b6192ace44/whisperx/asr.py#L189
     result = model.transcribe(
         audio_file,
-        condition_on_previous_text=True,
-        suppress_blank=False  # <-- keep even low-energy start
+        # condition_on_previous_text=True,
+        # suppress_blank=False  # <-- keep even low-energy start
     )
 
 
