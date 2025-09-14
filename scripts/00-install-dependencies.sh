@@ -90,4 +90,4 @@ echo "[*] Installing/updating Python packages..."
     git+https://github.com/openai/whisper.git # removed for whisperx for better timestamps
 
 # Need to add huggingface token to this 
-# python3 ../predownload_models.py
+# "$VENV_DIR/bin/python" ../predownload_models.py
