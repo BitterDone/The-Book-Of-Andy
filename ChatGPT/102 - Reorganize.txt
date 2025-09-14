@@ -1566,6 +1566,142 @@
     ---
 
     If you want, I can rewrite your **full `transcribe_with_speakers` function** to use this tqdm-aligned, chunked approach, returning a `result_aligned` compatible with the rest of your code. Do you want me to do that?
+--------------------------------
+    Can the alignment be optimized or enhanced for parallel execution on multiple CPUs?
+--------------------------------
+    Yes — the **alignment step in WhisperX is CPU-bound** and can be significantly sped up by **parallelizing across multiple CPU cores**. Let me break it down.
 
+    ---
+
+    ### 1️⃣ How WhisperX alignment works
+
+    * Each segment from Whisper is **aligned independently** to the audio using forced alignment.
+    * The current sequential approach:
+
+    ```python
+    for seg in result["segments"]:
+        aligned = whisperx.align([seg], align_model, metadata, audio_file, device)
+    ```
+
+    * Runs **one segment at a time** → slow for long podcasts.
+
+    ---
+
+    ### 2️⃣ Parallelization strategy
+
+    * Use **Python multiprocessing** or `concurrent.futures.ThreadPoolExecutor` / `ProcessPoolExecutor`.
+    * Each CPU core can process a **chunk of segments** simultaneously.
+    * Merge results afterward into `result_aligned`.
+
+    ---
+
+    ### 3️⃣ Example with `concurrent.futures.ProcessPoolExecutor`
+
+    ```python
+    from concurrent.futures import ProcessPoolExecutor, as_completed
+    import whisperx
+
+    def align_segment(seg, align_model, metadata, audio_file, device):
+        result = whisperx.align([seg], align_model, metadata, audio_file, device)
+        return result["segments"][0], result["word_segments"]
+
+    aligned_segments = []
+    word_segments = []
+
+    with ProcessPoolExecutor() as executor:
+        futures = [executor.submit(align_segment, seg, align_model, metadata, audio_file, "cpu")
+                for seg in result["segments"]]
+
+        for future in as_completed(futures):
+            seg_aligned, words = future.result()
+            aligned_segments.append(seg_aligned)
+            word_segments.extend(words)
+
+    # Reconstruct result_aligned
+    result_aligned = {
+        "segments": aligned_segments,
+        "word_segments": word_segments
+    }
+    ```
+
+    **Notes:**
+
+    1. Use `"cpu"` for `device` inside the worker processes. GPU isn’t shared easily across multiple Python processes.
+    2. Number of processes defaults to your CPU core count (`os.cpu_count()`), but you can set `ProcessPoolExecutor(max_workers=8)` for a limit.
+    3. Keep track of order if necessary — `as_completed()` returns results as they finish, so you may need to **sort `aligned_segments` by start time** afterward.
+
+    ---
+
+    ### 4️⃣ Benefits
+
+    * Speeds up alignment by roughly **N×**, where N = number of CPU cores (minus overhead).
+    * Especially effective for **long podcasts with hundreds of segments**.
+    * Works well in combination with tqdm for progress monitoring.
+
+    ---
+
+    ### 5️⃣ Caveats
+
+    * Each process consumes **memory**, so on a large episode, you may hit RAM limits if you spawn too many processes.
+    * GPU acceleration for alignment is limited; most of the work is CPU-bound anyway.
+
+    ---
+
+    If you want, I can provide a **fully integrated, parallelized alignment version** of your `transcribe_with_speakers` function with **tqdm progress bar**, returning `result_aligned` exactly like the original WhisperX output. This would maximize CPU usage and reduce runtime for long podcasts.
+
+    Do you want me to do that?
+--------------------------------
+    Will parallelization speed up alignment for transcription of one audio file, or will I need to have multiple audio file transcriptions in parallel progress to see an alignment speed increase?
+--------------------------------
+    Yes — parallelization can **speed up alignment for a single audio file**, because WhisperX aligns each segment independently. You don’t need multiple audio files to see a benefit.
+
+    Here’s how it works:
+
+    ---
+
+    ### 1️⃣ Single-file parallelization
+
+    * Your audio file is split into **Whisper segments** (usually a few seconds each).
+    * Each segment can be aligned independently with the forced-alignment model.
+    * By assigning multiple segments to **different CPU cores simultaneously**, you process many segments at once.
+    * Total alignment time ≈ **time per segment ÷ number of CPU cores** (minus overhead).
+
+    ✅ This works **even for one long podcast**, especially if it has hundreds of segments.
+
+    ---
+
+    ### 2️⃣ Multi-file parallelization
+
+    * You could also run multiple audio files **in parallel**, each on different cores or GPUs.
+    * This gives additional speedup if you have **many episodes** to process, but it’s not necessary for just one file.
+
+    ---
+
+    ### 3️⃣ Practical notes
+
+    1. **Memory usage**: Each parallel process uses some RAM. For very long episodes, limit workers:
+
+    ```python
+    max_workers = min(os.cpu_count(), 8)
+    ```
+
+    2. **GPU**: Alignment is mostly **CPU-bound**, so assigning segments to GPU won’t help much.
+
+    3. **Ordering**: If order matters for your final transcript, sort aligned segments by start time after parallel processing.
+
+    ---
+
+    💡 **Bottom line:** Parallelizing at the segment level **reduces alignment time for a single long podcast**. Multi-file parallelization is only needed if you want to process multiple episodes simultaneously.
+
+    If you want, I can provide a **ready-to-drop parallelized alignment snippet** that handles a single audio file efficiently and preserves `result_aligned`.
+
+--------------------------------
+--------------------------------
+--------------------------------
+--------------------------------
+--------------------------------
+--------------------------------
+--------------------------------
+--------------------------------
 --------------------------------
 --------------------------------

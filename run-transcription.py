@@ -13,6 +13,7 @@ import warnings
 import math
 import torch
 from tqdm import tqdm
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 # ---- CONFIG ----
 TRANSCRIPTS_DIR = "original_transcripts"
@@ -89,22 +90,50 @@ def transcribe_with_speakers(model, audio_file: str, hf_token: str, fill_gaps: b
         language_code="en", device=device
     )
 
-# # Use this with TQDM progress bar
-    word_segments = []
-    for seg in tqdm(result["segments"], desc="Aligning segments"):
-        aligned = whisperx.align([seg], align_model, metadata, audio_file, device)
-        word_segments.extend(aligned["word_segments"])
+# Start alignment section ---------------------------------
+# Notes:
+#     Use "cpu" for device inside the worker processes. 
+#       GPU isn’t shared easily across multiple Python processes.
+#     Number of processes defaults to your CPU core count (os.cpu_count()), 
+#       but you can set ProcessPoolExecutor(max_workers=8) for a limit.
+#     Keep track of order if necessary — as_completed() returns results as they finish, 
+#       so you may need to sort aligned_segments by start time afterward.
 
-    # Reconstruct result_aligned like WhisperX would return
+    aligned_segments = []   # not currently used since keeping TQDM progress bar
+    word_segments = []      # used for eliminating timestamp gaps and better alignment
+    # # Use this with TQDM progress bar and parallel processing
+    def align_segment(seg, align_model, metadata, audio_file, device):
+        result = whisperx.align([seg], align_model, metadata, audio_file, device)
+        return result["segments"][0], result["word_segments"]
+    
+    max_workers = min(os.cpu_count(), 8)  # limit to 8 or your CPU count
+    with ProcessPoolExecutor(max_workers) as executor:
+        futures = [executor.submit(align_segment, seg, align_model, metadata, audio_file, "cpu")
+                for seg in result["segments"]]
+
+        for future in as_completed(futures):
+            seg_aligned, words = future.result()
+            aligned_segments.append(seg_aligned) # not currently used
+            word_segments.extend(words)
+
+    # # Use this with TQDM progress bar and synchronous processing
+    # for seg in tqdm(result["segments"], desc="Aligning segments"):
+    #     aligned = whisperx.align([seg], align_model, metadata, audio_file, device)
+    #     word_segments.extend(aligned["word_segments"])
+
+    # # Reconstruct result_aligned like WhisperX would return
     result_aligned = {
-        "word_segments": word_segments
+        "segments": aligned_segments,   # not currently used since keeping TQDM progress bar
+        "word_segments": word_segments  # used for eliminating timestamp gaps and better alignment
     }
 
-# # Use this without TQDM progress bar
+    # # Use this without TQDM progress bar
     # # Step 3: Perform alignment for accurate word-level timestamps
     # result_aligned = whisperx.align(
     #     result["segments"], align_model, metadata, audio_file, device
     # )
+
+# End alignment section ---------------------------------
 
     if detailed_logging:
         print(f"[*] Aligned, performing diarization...")
