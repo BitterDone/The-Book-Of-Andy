@@ -1,0 +1,4 @@
+Instead of hard-coding, you could keep corrections in a JSON or YAML file and load dynamically.
+If you want fuzzy correction (like catching “smokin mirrors” too), integrate symspellpy
+ or spaCy with a custom vocabulary.
+Do you want me to extend this beyond a static dictionary and show you how to set up a lightweight fuzzy matcher so you don’t have to manually add every mishearing?
