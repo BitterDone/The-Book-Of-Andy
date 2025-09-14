@@ -63,6 +63,13 @@ def clean_audio(infile: str, outfile: str):
 def format_time(seconds: float) -> str:
     return str(timedelta(seconds=int(seconds)))
 
+# # Use this with TQDM progress bar and parallel processing
+# Move here to avoid
+# AttributeError: Can't pickle local object 'transcribe_with_speakers.<locals>.align_segment'
+def align_segment(seg, align_model, metadata, audio_file, device):
+    result = whisperx.align([seg], align_model, metadata, audio_file, device)
+    return result["segments"][0], result["word_segments"]
+    
 def transcribe_with_speakers(model, audio_file: str, hf_token: str, fill_gaps: bool, device: str, detailed_logging: bool) -> str:
     """Run Whisper + diarization, keeping Whisper as ground truth timeline,
     and filling diarization gaps with Whisper fallback.
@@ -101,15 +108,17 @@ def transcribe_with_speakers(model, audio_file: str, hf_token: str, fill_gaps: b
 
     aligned_segments = []   # not currently used since keeping TQDM progress bar
     word_segments = []      # used for eliminating timestamp gaps and better alignment
+
     # # Use this with TQDM progress bar and parallel processing
-    def align_segment(seg, align_model, metadata, audio_file, device):
-        result = whisperx.align([seg], align_model, metadata, audio_file, device)
-        return result["segments"][0], result["word_segments"]
-    
+    # align_segment is defined above to avoid 
+    # AttributeError: Can't pickle local object 'transcribe_with_speakers.<locals>.align_segment'
+   
     max_workers = min(os.cpu_count(), 8)  # limit to 8 or your CPU count
     with ProcessPoolExecutor(max_workers) as executor:
-        futures = [executor.submit(align_segment, seg, align_model, metadata, audio_file, "cpu")
-                for seg in result["segments"]]
+        futures = [
+            executor.submit(align_segment, seg, align_model, metadata, audio_file, "cpu")
+                for seg in result["segments"]
+            ]
 
         for future in as_completed(futures):
             seg_aligned, words = future.result()

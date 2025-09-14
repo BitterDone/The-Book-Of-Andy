@@ -1834,8 +1834,37 @@
     Optional: you can add more Whisper models to `WHISPER_MODELS` if you want multiple sizes pre-cached for different runs.
 
     Do you want me to **also modify this to pre-download multiple Pyannote diarization models** in one run for future flexibility?
-
 --------------------------------
+    It looks like there's an issue with the parallelism:
+
+    concurrent.futures.process._RemoteTraceback: 
+    """
+    Traceback (most recent call last):
+    File "/usr/lib/python3.10/multiprocessing/queues.py", line 244, in _feed
+        obj = _ForkingPickler.dumps(obj)
+    File "/usr/lib/python3.10/multiprocessing/reduction.py", line 51, in dumps
+        cls(buf, protocol).dump(obj)
+    AttributeError: Can't pickle local object 'transcribe_with_speakers.<locals>.align_segment'
+    """
+
+    The above exception was the direct cause of the following exception:
+
+    Traceback (most recent call last):
+    File "/home/ubuntu/The-Book-Of-Andy/run-transcription.py", line 297, in <module>
+        main()
+    File "/home/ubuntu/The-Book-Of-Andy/run-transcription.py", line 277, in main
+        transcript = transcribe_with_speakers(model, clean_wav, args.token, fill_gaps=(args.fill_gaps.lower() == "on"), device=device, detailed_logging=True)
+    File "/home/ubuntu/The-Book-Of-Andy/run-transcription.py", line 115, in transcribe_with_speakers
+        seg_aligned, words = future.result()
+    File "/usr/lib/python3.10/concurrent/futures/_base.py", line 451, in result
+        return self.__get_result()
+    File "/usr/lib/python3.10/concurrent/futures/_base.py", line 403, in __get_result
+        raise self._exception
+    File "/usr/lib/python3.10/multiprocessing/queues.py", line 244, in _feed
+        obj = _ForkingPickler.dumps(obj)
+    File "/usr/lib/python3.10/multiprocessing/reduction.py", line 51, in dumps
+        cls(buf, protocol).dump(obj)
+    AttributeError: Can't pickle local object 'transcribe_with_speakers.<locals>.align_segment'
 --------------------------------
 --------------------------------
 --------------------------------
