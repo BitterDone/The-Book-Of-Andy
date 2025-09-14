@@ -78,7 +78,7 @@ def transcribe_with_speakers(model, audio_file: str, hf_token: str, fill_gaps: b
         # suppress_blank=False  # <-- keep even low-energy start
     )
 
-
+    print(f"[*] Transcribed, loading alignment model...")
     # Step 2: Load alignment model (language-specific)
     align_model, metadata = whisperx.load_align_model(
         # Results in
@@ -92,7 +92,7 @@ def transcribe_with_speakers(model, audio_file: str, hf_token: str, fill_gaps: b
         result["segments"], align_model, metadata, audio_file, device
     )
 
-
+    print(f"[*] Aligned, performing diarization...")
     # PyAnnote diarization
     pipeline = Pipeline.from_pretrained(DIARIZATION_MODEL, use_auth_token=hf_token)
     diarization = pipeline(audio_file)
@@ -127,6 +127,7 @@ def transcribe_with_speakers(model, audio_file: str, hf_token: str, fill_gaps: b
 
         lines.append(f"[{format_time(start)} - {format_time(end)}] {speaker}: {text}")
 
+    print(f"[*] Diarized, filling gaps...")
     # ---- Option 3 extra: fill diarization gaps that Whisper didn’t cover ----
     # Walk through diarization timeline and insert dummy lines if Whisper missed it.
     if fill_gaps:
@@ -155,8 +156,10 @@ def transcribe_with_speakers(model, audio_file: str, hf_token: str, fill_gaps: b
         h, m, s = map(int, timestamp.split(":"))
         return h * 3600 + m * 60 + s
 
+    print(f"[*] Gapped, sorting by timestamp...")
     lines.sort(key=line_start_time)
 
+    print(f"[*] Sorted, returning from transcribe_with_speakers()")
     return apply_corrections("\n".join(lines))
 
 def transcribe(model, audio_file: str) -> str:
@@ -226,6 +229,7 @@ def main():
             # Simple transcription without diarization
             transcript = transcribe(model, clean_wav)
 
+        print(f"[*] Writing file...")
         with open(txt_path, "w", encoding="utf-8") as f:
             f.write(f"# {entry.title}\n")
             f.write(f"Date: {entry.get('published', 'unknown')}\n")
