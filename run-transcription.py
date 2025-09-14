@@ -70,10 +70,12 @@ def align_segment(seg, align_model, metadata, audio_file, device):
     result = whisperx.align([seg], align_model, metadata, audio_file, device)
     return result["segments"][0], result["word_segments"]
     
-def transcribe_with_speakers(model, audio_file: str, hf_token: str, fill_gaps: bool, device: str, detailed_logging: bool) -> str:
+def transcribe_with_speakers(model, audio_file: str, hf_token: str, fill_gaps: bool, device: str, detailed_logs: bool) -> str:
     """Run Whisper + diarization, keeping Whisper as ground truth timeline,
     and filling diarization gaps with Whisper fallback.
     """
+    
+    print(f"[✓] args.detailed_logs: {args.detailed_logs}")
     # Removed whisper in favor of whisperx
     # # Whisper with timestamps
     # result = model.transcribe(audio_file, word_timestamps=True)
@@ -87,7 +89,7 @@ def transcribe_with_speakers(model, audio_file: str, hf_token: str, fill_gaps: b
         # suppress_blank=False  # <-- keep even low-energy start
     )
 
-    if detailed_logging:
+    if detailed_logs:
         print(f"[*] Transcribed, loading alignment model...")
     # Step 2: Load alignment model (language-specific)
     align_model, metadata = whisperx.load_align_model(
@@ -144,7 +146,7 @@ def transcribe_with_speakers(model, audio_file: str, hf_token: str, fill_gaps: b
 
 # End alignment section ---------------------------------
 
-    if detailed_logging:
+    if detailed_logs:
         print(f"[*] Aligned, performing diarization...")
     # PyAnnote diarization
     pipeline = Pipeline.from_pretrained(DIARIZATION_MODEL, use_auth_token=hf_token)
@@ -180,7 +182,7 @@ def transcribe_with_speakers(model, audio_file: str, hf_token: str, fill_gaps: b
 
         lines.append(f"[{format_time(start)} - {format_time(end)}] {speaker}: {text}")
 
-    if detailed_logging:
+    if detailed_logs:
         print(f"[*] Diarized, filling gaps...")
     # ---- Option 3 extra: fill diarization gaps that Whisper didn’t cover ----
     # Walk through diarization timeline and insert dummy lines if Whisper missed it.
@@ -210,11 +212,11 @@ def transcribe_with_speakers(model, audio_file: str, hf_token: str, fill_gaps: b
         h, m, s = map(int, timestamp.split(":"))
         return h * 3600 + m * 60 + s
 
-    if detailed_logging:
+    if detailed_logs:
         print(f"[*] Gapped, sorting by timestamp...")
     lines.sort(key=line_start_time)
 
-    if detailed_logging:
+    if detailed_logs:
         print(f"[*] Sorted, returning from transcribe_with_speakers()")
     return apply_corrections("\n".join(lines))
 
@@ -283,6 +285,8 @@ def main():
         if args.diarize.lower() == "on":
             print(f"[*] Transcribing with speakers...")
             # Full transcription with diarization
+            print(f"[✓] args.detailed_logs.lower(): {args.detailed_logs.lower()}")
+            print(f"[✓] == on: {args.detailed_logs.lower() == 'on'}")
             transcript = transcribe_with_speakers(model, clean_wav, args.token, fill_gaps=(args.fill_gaps.lower() == "on"), device=device, detailed_logging=(args.detailed_logs.lower() == "on"))
         else:
             print(f"[*] Transcribing without speakers...")
