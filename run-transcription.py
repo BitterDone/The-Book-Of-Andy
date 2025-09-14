@@ -11,6 +11,7 @@ from pyannote.audio import Pipeline
 from datetime import timedelta
 import warnings
 import math
+import torch
 
 # ---- CONFIG ----
 TRANSCRIPTS_DIR = "original_transcripts"
