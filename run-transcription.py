@@ -14,12 +14,16 @@ import math
 import torch
 from tqdm import tqdm
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from pydub import AudioSegment
 
 # ---- CONFIG ----
 TRANSCRIPTS_DIR = "original_transcripts"
 # Noticed some accuracy issues with diarization on base. Moving to medium. Large-v3 is even better with a strong GPU.
 WHISPER_MODEL = "medium"  # tiny, base, small, medium, large
 DIARIZATION_MODEL = "pyannote/speaker-diarization-3.1"
+AUDIO_FILE_CHUNK_LENGTH_MS = 60 * 1000 * 10  # 10 min
+ALIGN_LANG="en"
+MAX_WORKERS = min(os.cpu_count(), 8)  # limit to 8 or your CPU count
 
 # Common misheard phrase corrections
 COMMON_FIXES = {
@@ -29,6 +33,8 @@ COMMON_FIXES = {
     "Priscilla": "Frisella",
     # add more as you encounter them
 }
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
 
 def apply_corrections(text: str) -> str:
     """Apply common misheard phrase corrections to transcript text"""
@@ -63,6 +69,63 @@ def clean_audio(infile: str, outfile: str):
 def format_time(seconds: float) -> str:
     return str(timedelta(seconds=int(seconds)))
 
+def process_chunk(chunk_file):
+    # Load models inside the process to avoid pickling issues
+    # Load Whisper model once
+    print(f"[*] Loading Whisper model: {WHISPER_MODEL}")
+    model = whisperx.load_model(WHISPER_MODEL, device)
+    # # large-v3 requires ~10 GB VRAM minimum. An A100 (40GB) or H100 is safe.
+    # # medium requires ~5 GB VRAM. Runs fine on cheaper GPUs like T4.
+    # # If out-of-memory errors arise,
+    # # fall back to "base" at WHISPER_MODEL = "medium"
+    # # Or enable compute_type="int8" for quantization:
+    # model = whisperx.load_model(WHISPER_MODEL, device, compute_type="int8")
+
+    align_model, metadata = whisperx.load_align_model(language_code=ALIGN_LANG, device=device)
+
+    # Transcribe chunk
+    result = model.transcribe(chunk_file, language="en")
+
+    # Align segments
+    word_segments = []
+    aligned_segments = []
+    for seg in result["segments"]:
+        aligned = whisperx.align([seg], align_model, metadata, chunk_file, device)
+        aligned_segments.append(aligned["segments"][0])
+        word_segments.extend(aligned["word_segments"])
+
+    return aligned_segments, word_segments
+
+def split_audio_to_chunks(audio_path, chunk_length_ms=AUDIO_FILE_CHUNK_LENGTH_MS):
+    audio = AudioSegment.from_file(audio_path)
+    chunks = []
+    for i in range(0, len(audio), chunk_length_ms):
+        chunk_file = f"{audio_path}_chunk{i//1000}.wav"
+        audio[i:i+chunk_length_ms].export(chunk_file, format="wav")
+        chunks.append(chunk_file)
+    return chunks
+    
+def transcribe_with_speakers_parellel_align(model, audio_file: str, hf_token: str, fill_gaps: bool, detailed_logs: bool) -> str:
+    chunks = split_audio_to_chunks(audio_file)
+
+    aligned_segments_all = []
+    word_segments_all = []
+
+    with ProcessPoolExecutor(MAX_WORKERS) as executor:
+        futures = [executor.submit(process_chunk, chunk) for chunk in chunks]
+        for future in as_completed(futures):
+            aligned_segments, word_segments = future.result()
+            aligned_segments_all.extend(aligned_segments)
+            word_segments_all.extend(word_segments)
+
+    # Sort by start time
+    aligned_segments_all.sort(key=lambda s: s["start"])
+    word_segments_all.sort(key=lambda w: w["start"])
+
+    # Cleanup chunk files
+    for chunk in chunks:
+        os.remove(chunk)
+
 # # Use this with TQDM progress bar and parallel processing
 # Move here to avoid
 # AttributeError: Can't pickle local object 'transcribe_with_speakers.<locals>.align_segment'
@@ -70,7 +133,7 @@ def align_segment(seg, align_model, metadata, audio_file, device):
     result = whisperx.align([seg], align_model, metadata, audio_file, device)
     return result["segments"][0], result["word_segments"]
     
-def transcribe_with_speakers(model, audio_file: str, hf_token: str, fill_gaps: bool, device: str, detailed_logs: bool) -> str:
+def transcribe_with_speakers(model, audio_file: str, hf_token: str, fill_gaps: bool, detailed_logs: bool) -> str:
     """Run Whisper + diarization, keeping Whisper as ground truth timeline,
     and filling diarization gaps with Whisper fallback.
     """
@@ -96,7 +159,7 @@ def transcribe_with_speakers(model, audio_file: str, hf_token: str, fill_gaps: b
         # Results in
         # No language specified, language will be first be detected for each audio file (increases inference time).
         # language_code=result["language"], device=device
-        language_code="en", device=device
+        language_code=ALIGN_LANG, device=device
     )
 
 # Start alignment section ---------------------------------
@@ -115,8 +178,7 @@ def transcribe_with_speakers(model, audio_file: str, hf_token: str, fill_gaps: b
     # align_segment is defined above to avoid 
     # AttributeError: Can't pickle local object 'transcribe_with_speakers.<locals>.align_segment'
    
-    max_workers = min(os.cpu_count(), 8)  # limit to 8 or your CPU count
-    with ProcessPoolExecutor(max_workers) as executor:
+    with ProcessPoolExecutor(MAX_WORKERS) as executor:
         futures = [
             executor.submit(align_segment, seg, align_model, metadata, audio_file, "cpu")
                 for seg in result["segments"]
@@ -247,17 +309,16 @@ def main():
     outdir = os.path.join(args.repo, TRANSCRIPTS_DIR)
     os.makedirs(outdir, exist_ok=True)
 
-    # Load Whisper model once
-    print(f"[*] Loading Whisper model: {WHISPER_MODEL}")
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = whisperx.load_model(WHISPER_MODEL, device)
-    # # large-v3 requires ~10 GB VRAM minimum. An A100 (40GB) or H100 is safe.
-    # # medium requires ~5 GB VRAM. Runs fine on cheaper GPUs like T4.
-    # # If out-of-memory errors arise,
-    # # fall back to "base" at WHISPER_MODEL = "medium"
-    # # Or enable compute_type="int8" for quantization:
-    # model = whisperx.load_model(WHISPER_MODEL, device, compute_type="int8")
-
+    # # Can't load the model out here if using ProcessPoolExecutor
+    # # Load Whisper model once
+    # print(f"[*] Loading Whisper model: {WHISPER_MODEL}")
+    # model = whisperx.load_model(WHISPER_MODEL, device)
+    # # # large-v3 requires ~10 GB VRAM minimum. An A100 (40GB) or H100 is safe.
+    # # # medium requires ~5 GB VRAM. Runs fine on cheaper GPUs like T4.
+    # # # If out-of-memory errors arise,
+    # # # fall back to "base" at WHISPER_MODEL = "medium"
+    # # # Or enable compute_type="int8" for quantization:
+    # # model = whisperx.load_model(WHISPER_MODEL, device, compute_type="int8")
 
     # Parse RSS feed
     feed = feedparser.parse(args.rss)
@@ -287,7 +348,7 @@ def main():
             # Full transcription with diarization
             print(f"[✓] args.detailed_logs.lower(): {args.detailed_logs.lower()}")
             print(f"[✓] == on: {args.detailed_logs.lower() == 'on'}")
-            transcript = transcribe_with_speakers(model, clean_wav, args.token, fill_gaps=(args.fill_gaps.lower() == "on"), device=device, detailed_logging=(args.detailed_logs.lower() == "on"))
+            transcript = transcribe_with_speakers(model, clean_wav, args.token, fill_gaps=(args.fill_gaps.lower() == "on"), detailed_logging=(args.detailed_logs.lower() == "on"))
         else:
             print(f"[*] Transcribing without speakers...")
             # Simple transcription without diarization

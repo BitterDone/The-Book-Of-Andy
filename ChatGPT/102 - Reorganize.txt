@@ -1866,8 +1866,393 @@
         cls(buf, protocol).dump(obj)
     AttributeError: Can't pickle local object 'transcribe_with_speakers.<locals>.align_segment'
 --------------------------------
+    Ah — this error is very common when using `concurrent.futures.ProcessPoolExecutor` (or Python `multiprocessing`) with **functions defined inside another function**. Let me break it down:
+
+    ---
+
+    ### 1️⃣ Why it happens
+
+    ```
+    AttributeError: Can't pickle local object 'transcribe_with_speakers.<locals>.align_segment'
+    ```
+
+    * `ProcessPoolExecutor` needs to **serialize (pickle) the target function** to send it to child processes.
+    * Functions **defined inside another function** (like your `align_segment` inside `transcribe_with_speakers`) are **not picklable**.
+    * Only top-level functions (defined at the module level) can be sent to worker processes.
+
+    ---
+
+    ### 2️⃣ How to fix
+
+    Move the `align_segment` function **outside** of `transcribe_with_speakers` so it’s a **module-level function**.
+
+    Example:
+
+    ```python
+    # Move this to top-level of your script (not inside any function)
+    def align_segment(seg, align_model, metadata, audio_file, device):
+        result = whisperx.align([seg], align_model, metadata, audio_file, device)
+        return result["segments"][0], result["word_segments"]
+    ```
+
+    Then inside `transcribe_with_speakers`:
+
+    ```python
+    from concurrent.futures import ProcessPoolExecutor, as_completed
+
+    aligned_segments = []
+    word_segments = []
+
+    with ProcessPoolExecutor(max_workers=os.cpu_count()) as executor:
+        futures = [
+            executor.submit(align_segment, seg, align_model, metadata, audio_file, device)
+            for seg in result["segments"]
+        ]
+        for future in as_completed(futures):
+            seg_aligned, words = future.result()
+            aligned_segments.append(seg_aligned)
+            word_segments.extend(words)
+    ```
+
+    ---
+
+    ### 3️⃣ Key points
+
+    1. **Top-level only**: The function sent to `ProcessPoolExecutor` **cannot be nested inside another function**.
+    2. **All arguments must be picklable**: Avoid passing local objects like nested functions, local classes, or lambda functions.
+    3. **Ordering**: `as_completed()` returns results as they finish, so you may need to **sort by segment start time** afterward.
+
+    ---
+
+    ### 4️⃣ Optional: keep tqdm progress
+
+    ```python
+    from tqdm import tqdm
+
+    futures = [executor.submit(align_segment, seg, align_model, metadata, audio_file, device)
+            for seg in result["segments"]]
+
+    for future in tqdm(as_completed(futures), total=len(futures), desc="Aligning segments"):
+        seg_aligned, words = future.result()
+        aligned_segments.append(seg_aligned)
+        word_segments.extend(words)
+    ```
+
+    ---
+
+    ✅ **Bottom line:** Move `align_segment` to the top of your Python script. Then the `ProcessPoolExecutor` will work without pickling errors.
+
+    ---
+
+    If you want, I can provide a **fully fixed parallelized alignment snippet** that is compatible with your existing `transcribe_with_speakers` function and returns `result_aligned` exactly like WhisperX expects. Do you want me to do that?
 --------------------------------
+    There's some error about serialization:
+
+
+    [*] Transcribed, loading alignment model...
+    concurrent.futures.process._RemoteTraceback: 
+    """
+    Traceback (most recent call last):
+    File "/usr/lib/python3.10/multiprocessing/queues.py", line 244, in _feed
+        obj = _ForkingPickler.dumps(obj)
+    File "/usr/lib/python3.10/multiprocessing/reduction.py", line 51, in dumps
+        cls(buf, protocol).dump(obj)
+    File "/home/ubuntu/The-Book-Of-Andy/.venv/lib/python3.10/site-packages/torch/nn/utils/parametrize.py", line 340, in getstate
+        raise RuntimeError(
+    RuntimeError: Serialization of parametrized modules is only supported through state_dict(). See:
+    https://pytorch.org/tutorials/beginner/saving_loading_models.html#saving-loading-a-general-checkpoint-for-inference-and-or-resuming-training
+    """
+
+    The above exception was the direct cause of the following exception:
+
+    Traceback (most recent call last):
+    File "/home/ubuntu/The-Book-Of-Andy/run-transcription.py", line 306, in <module>
+        main()
+    File "/home/ubuntu/The-Book-Of-Andy/run-transcription.py", line 286, in main
+        transcript = transcribe_with_speakers(model, clean_wav, args.token, fill_gaps=(args.fill_gaps.lower() == "on"), device=device, detailed_logging=(args.detailed_logs.lower() == "on"))
+    File "/home/ubuntu/The-Book-Of-Andy/run-transcription.py", line 124, in transcribe_with_speakers
+        seg_aligned, words = future.result()
+    File "/usr/lib/python3.10/concurrent/futures/_base.py", line 451, in result
+        return self.__get_result()
+    File "/usr/lib/python3.10/concurrent/futures/_base.py", line 403, in __get_result
+        raise self._exception
+    File "/usr/lib/python3.10/multiprocessing/queues.py", line 244, in _feed
+        obj = _ForkingPickler.dumps(obj)
+    File "/usr/lib/python3.10/multiprocessing/reduction.py", line 51, in dumps
+        cls(buf, protocol).dump(obj)
+    File "/home/ubuntu/The-Book-Of-Andy/.venv/lib/python3.10/site-packages/torch/nn/utils/parametrize.py", line 340, in getstate
+        raise RuntimeError(
+    RuntimeError: Serialization of parametrized modules is only supported through state_dict(). See:
+    https://pytorch.org/tutorials/beginner/saving_loading_models.html#saving-loading-a-general-checkpoint-for-inference-and-or-resuming-training
+    [W914 22:22:55.496446155 CudaIPCTypes.cpp:16] Producer process has been terminated before all shared CUDA tensors released. See Note [Sharing CUDA tensors]
 --------------------------------
+    Ah — this is a different serialization issue, specific to **PyTorch models with parametrizations** (like `WhisperX` alignment model).
+
+    ---
+
+    ### 1️⃣ What’s happening
+
+    * `ProcessPoolExecutor` (or `multiprocessing`) **tries to pickle all function arguments**, including the `align_model`.
+    * PyTorch **modules cannot be pickled directly** if they have parametrizations (or certain buffers).
+    * That’s why you see:
+
+    ```
+    RuntimeError: Serialization of parametrized modules is only supported through state_dict()
+    ```
+
+    * Essentially, the model object **cannot be sent to child processes**, which breaks your current segment-level parallelism.
+
+    ---
+
+    ### 2️⃣ Solutions
+
+    #### Option A — Move alignment to a **single process**
+
+    * Run all alignment **sequentially** in the main process.
+    * Use **tqdm** or a logging loop to monitor progress.
+    * This is the simplest and fully compatible solution.
+
+    ```python
+    word_segments = []
+    aligned_segments = []
+
+    for seg in tqdm(result["segments"], desc="Aligning segments"):
+        aligned = whisperx.align([seg], align_model, metadata, audio_file, device)
+        aligned_segments.append(aligned["segments"][0])
+        word_segments.extend(aligned["word_segments"])
+    ```
+
+    ✅ Works for all models, avoids serialization errors, compatible with GPU.
+
+    ---
+
+    #### Option B — Parallelize on **audio chunks**, not segments
+
+    * Split your **audio into multiple WAV files** (e.g., 5–10 min chunks).
+    * Run `transcribe_with_speakers` **in parallel per chunk**.
+    * Each process **loads its own model independently**.
+    * Pros: real parallelism, avoids pickling model objects.
+    * Cons: memory-heavy, each process reloads WhisperX alignment model.
+
+    ---
+
+    #### Option C — CPU-only alignment with PyTorch’s **spawn** method
+
+    * Use `multiprocessing.set_start_method("spawn")` and move model loading **inside the worker function**.
+    * Each worker loads its own model to avoid pickling issues.
+    * More complex and slower to start, but allows segment-level parallelism.
+
+    ---
+
+    ### 3️⃣ Recommendation
+
+    * **For simplicity and reliability**: go with **Option A** — sequential alignment with `tqdm` progress.
+    * Segment-level parallelism with PyTorch models **is tricky** due to pickling limitations.
+    * You can still parallelize at the **audio file level** if you have multiple episodes.
+
+    ---
+
+    💡 **Bottom line:**
+
+    * The error is caused by trying to send the `align_model` object to child processes.
+    * PyTorch modules with parametrizations **cannot be pickled**.
+    * Sequential alignment with progress logging is the safest way to handle long audio files with WhisperX.
+
+    ---
+
+    If you want, I can provide a **fully revised `transcribe_with_speakers` function** that:
+
+    1. Uses `tqdm` for segment-level progress.
+    2. Avoids parallelism on segments to prevent pickling errors.
+    3. Still produces `result_aligned` with word-level timestamps ready for Meilisearch.
+
+    Do you want me to do that?
 --------------------------------
+    Compare options B and C for me
+--------------------------------
+    Absolutely — let’s break down **Option B vs. Option C** for parallelizing WhisperX alignment, with a focus on practical pros, cons, and scenarios where each makes sense.
+
+    ---
+
+    ## **Option B — Parallelize by audio chunks (multiple WAV files)**
+
+    **How it works:**
+
+    1. Split your long audio file into several chunks (e.g., 5–10 min each).
+    2. Spawn a **separate process for each chunk**.
+    3. Each process **loads its own WhisperX model** and runs alignment independently.
+    4. Merge the aligned segments afterward into a single transcript.
+
+    **Pros:**
+
+    * ✅ Avoids pickling the model — each process has its own copy.
+    * ✅ Works with GPUs — each process can select a GPU or use CPU.
+    * ✅ True parallelism across multiple cores (or multiple GPUs).
+    * ✅ Scales well if you have **multiple long episodes** to process.
+
+    **Cons:**
+
+    * ❌ Memory-heavy: each process loads a full WhisperX model, plus Wav2Vec2 and Pyannote models.
+    * ❌ Overhead: starting processes and loading models repeatedly can take a few minutes.
+    * ❌ Slight complexity: need to split/merge audio and aligned segments.
+
+    **Best use case:**
+
+    * Very long episodes **or multiple episodes** that you want to process concurrently.
+    * You have a **large machine with enough RAM and multiple GPUs**.
+
+    ---
+
+    ## **Option C — CPU-only segment-level parallelism with spawn**
+
+    **How it works:**
+
+    1. Keep the audio as one file.
+    2. Use `multiprocessing` with `start_method="spawn"`.
+    3. Move model loading **inside the worker function** so each segment alignment process loads its own copy.
+    4. Each worker processes one or more segments, then returns aligned segments.
+
+    **Pros:**
+
+    * ✅ True parallelism at segment level — can fully use CPU cores.
+    * ✅ Works on one long file without splitting audio.
+    * ✅ Avoids pickling errors because model is loaded **inside each process**.
+
+    **Cons:**
+
+    * ❌ Very memory-heavy: each worker loads the full WhisperX + alignment model. Even more so than Option B if you have hundreds of segments.
+    * ❌ Slow startup: loading large models per process adds noticeable overhead.
+    * ❌ GPU usage is limited — you usually have to use CPU because multiple processes cannot safely share the GPU without advanced management.
+
+    **Best use case:**
+
+    * Long audio where you **must speed up alignment but don’t have multiple audio files**.
+    * Only practical on machines with **very high RAM** and **many CPU cores**, but GPU acceleration is mostly lost.
+
+    ---
+
+    ### **Summary Comparison**
+
+    | Feature                | Option B (Audio chunks)                       | Option C (Segment-level, spawn)           |
+    | ---------------------- | --------------------------------------------- | ----------------------------------------- |
+    | Granularity            | Chunk = multiple minutes                      | Segment = few seconds                     |
+    | Model loading          | Once per chunk                                | Once per worker                           |
+    | GPU usage              | Possible                                      | Mostly CPU only                           |
+    | Memory usage           | Moderate → High                               | Very high                                 |
+    | Complexity             | Moderate (split & merge)                      | High (spawn, workers, memory)             |
+    | Avoids pickling errors | ✅                                             | ✅ (because model loaded inside worker)    |
+    | Recommended for        | Multiple episodes, long chunks, GPU available | Single long audio, CPU-heavy environments |
+
+    ---
+
+    💡 **Bottom line:**
+
+    * **Option B** is generally more practical and efficient if you can split audio or have multiple episodes.
+    * **Option C** is more of a last-resort for trying segment-level parallelism on a **single file**, but it’s memory-intensive and usually CPU-bound.
+
+    ---
+
+    If you want, I can sketch a **concrete Option B workflow** for your WhisperX pipeline — splitting a long podcast, aligning chunks in parallel, then merging word-level timestamps for Meilisearch. This is usually the most efficient solution.
+
+    Do you want me to do that?
+--------------------------------
+    Can I implement Option B entirely in the run-transcription.py script?
+--------------------------------
+    Yes — you can implement **Option B (parallel audio chunks)** entirely inside `run-transcription.py` without breaking the rest of your pipeline. Here’s how it can be structured:
+
+    ---
+
+    ### **High-level workflow**
+
+    1. **Split the audio file** into N chunks (e.g., 5–10 minutes each).
+    2. **Spawn a process for each chunk**, where each process:
+
+    * Loads its own WhisperX alignment model.
+    * Runs transcription + alignment for that chunk.
+    * Returns the aligned segments and word-level timestamps.
+    3. **Merge all chunk results** in chronological order.
+    4. Continue with **speaker diarization and Meilisearch storage** as before.
+
+    ---
+
+    ### **Implementation outline**
+
+    ```python
+    import os
+    from concurrent.futures import ProcessPoolExecutor, as_completed
+    from pydub import AudioSegment
+    import whisperx
+    import whisper
+    import torch
+
+    # Config
+    CHUNK_LENGTH_MS = 10 * 60 * 1000  # 10 min
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    def process_chunk(chunk_file, align_lang="en"):
+        # Load models inside the process to avoid pickling issues
+        whisper_model = whisper.load_model("medium", device=device)
+        align_model, metadata = whisperx.load_align_model(language_code=align_lang, device=device)
+
+        # Transcribe chunk
+        result = whisper_model.transcribe(chunk_file, word_timestamps=True)
+
+        # Align segments
+        word_segments = []
+        aligned_segments = []
+        for seg in result["segments"]:
+            aligned = whisperx.align([seg], align_model, metadata, chunk_file, device)
+            aligned_segments.append(aligned["segments"][0])
+            word_segments.extend(aligned["word_segments"])
+
+        return aligned_segments, word_segments
+
+    def split_audio_to_chunks(audio_path, chunk_length_ms=CHUNK_LENGTH_MS):
+        audio = AudioSegment.from_file(audio_path)
+        chunks = []
+        for i in range(0, len(audio), chunk_length_ms):
+            chunk_file = f"{audio_path}_chunk{i//1000}.wav"
+            audio[i:i+chunk_length_ms].export(chunk_file, format="wav")
+            chunks.append(chunk_file)
+        return chunks
+
+    # ---- Example usage inside transcribe_with_speakers ----
+    chunks = split_audio_to_chunks(clean_wav)
+
+    aligned_segments_all = []
+    word_segments_all = []
+
+    with ProcessPoolExecutor(max_workers=min(len(chunks), os.cpu_count())) as executor:
+        futures = [executor.submit(process_chunk, chunk) for chunk in chunks]
+        for future in as_completed(futures):
+            aligned_segments, word_segments = future.result()
+            aligned_segments_all.extend(aligned_segments)
+            word_segments_all.extend(word_segments)
+
+    # Sort by start time
+    aligned_segments_all.sort(key=lambda s: s["start"])
+    word_segments_all.sort(key=lambda w: w["start"])
+
+    # Cleanup chunk files
+    for chunk in chunks:
+        os.remove(chunk)
+    ```
+
+    ---
+
+    ### **Key points**
+
+    1. **Model loading per process** avoids pickling errors.
+    2. **Parallelism is at the chunk level**, so memory usage is reasonable — only a few chunks in memory at once.
+    3. **Sorting by start time** ensures the final transcript is chronological.
+    4. This can be fully integrated into your `transcribe_with_speakers` function.
+
+    ---
+
+    If you want, I can **rewrite your `transcribe_with_speakers` function** to fully implement **Option B** with chunking, parallel alignment, and word-level timestamps ready for Meilisearch. This will replace your sequential segment-level alignment.
+
+    Do you want me to do that?
+--------------------------------
+
 --------------------------------
 --------------------------------
