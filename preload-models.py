@@ -4,12 +4,13 @@ import whisperx
 from pyannote.audio import Pipeline
 import torchaudio
 import torch
+import sys
 
 # ---- Configuration ----
 WHISPER_MODELS = ["medium", "large-v3"]  # list of Whisper models to preload
 ALIGNMENT_LANG = "en"
 DIARIZATION_MODEL = "pyannote/speaker-diarization-3.1"
-HF_TOKEN = "<YOUR_HUGGINGFACE_TOKEN>"
+HF_TOKEN = sys.argv[1]
 
 # ---- Device selection ----
 device = "cuda" if torch.cuda.is_available() else "cpu"

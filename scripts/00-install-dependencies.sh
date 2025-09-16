@@ -96,7 +96,7 @@ echo "Do you need to accept T/C to access a gated HF model?"
 # https://huggingface.co/pyannote/segmentation-3.0
 # https://huggingface.co/pyannote/speaker-diarization-3.1
 
-# HF_TOKEN=paste_your_token_here
+HF_TOKEN="" # paste_your_token_here
 
 HF_TOKEN_FILE="$HOME/.huggingface/token"
 
@@ -132,17 +132,19 @@ if ! check_hf_auth; then
         exit 1
     fi
 else
+    # Read the token from file, strip whitespace/newlines
+    HF_TOKEN=$(<../.huggingface/token)
     echo "[✓] Hugging Face authentication found."
 fi
 
 # ---- CHECK HUGGING FACE MODEL ACCESS ----
 echo "[*] Verifying access to pyannote/speaker-diarization-3.1..."
 
-if ! huggingface-cli whoami &>/dev/null; then
-    echo "[!] Hugging Face CLI not authenticated."
-    echo "    Run: huggingface-cli login"
-    exit 1
-fi
+# if ! huggingface-cli whoami &>/dev/null; then
+#     echo "[!] Hugging Face CLI not authenticated."
+#     echo "    Run: huggingface-cli login"
+#     exit 1
+# fi
 
 # Try to check access by hitting the model page API
 ACCESS_CHECK=$(curl -s -H "Authorization: Bearer ${HF_TOKEN:-}" https://huggingface.co/api/models/pyannote/speaker-diarization-3.1)
@@ -165,5 +167,4 @@ fi
 
 echo "[✓] Hugging Face access to diarization model confirmed."
 
-# Need to add huggingface token to this 
-"$VENV_DIR/bin/python" ../predownload_models.py
+"$VENV_DIR/bin/python" preload-models.py "$HF_TOKEN"
