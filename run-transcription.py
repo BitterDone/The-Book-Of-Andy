@@ -26,10 +26,10 @@ MAX_WORKERS = min(os.cpu_count(), 8)  # limit to 8 or your CPU count
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-def process_chunk(chunk_file):
+def process_chunk(chunk_file, chunk_id):
     # Load models inside the process to avoid pickling issues
     # Load Whisper model once
-    print(f"[*] Loading Whisper model: {WHISPER_MODEL}")
+    print(f"[*] Chunk #{chunk_id} Loading Whisper model: {WHISPER_MODEL}")
     model = whisperx.load_model(WHISPER_MODEL, device)
     # # large-v3 requires ~10 GB VRAM minimum. An A100 (40GB) or H100 is safe.
     # # medium requires ~5 GB VRAM. Runs fine on cheaper GPUs like T4.
@@ -41,7 +41,9 @@ def process_chunk(chunk_file):
     align_model, metadata = whisperx.load_align_model(language_code=ALIGN_LANG, device=device)
 
     # Transcribe chunk
+    print(f"[*] Transcribing chunk #{chunk_id}")
     result = model.transcribe(chunk_file, language="en")
+    print(f"[*] Transcribed chunk #{chunk_id}")
 
     # Align segments
     word_segments = []
@@ -60,7 +62,7 @@ def transcribe_with_speakers_parellel_align(model, audio_file: str, hf_token: st
     word_segments_all = []
 
     with ProcessPoolExecutor(MAX_WORKERS) as executor:
-        futures = [executor.submit(process_chunk, chunk) for chunk in chunks]
+        futures = [executor.submit(process_chunk, chunk, idx) for idx, chunk in enumerate(chunks)]
         for future in as_completed(futures):
             aligned_segments, word_segments = future.result()
             aligned_segments_all.extend(aligned_segments)
@@ -79,8 +81,8 @@ def transcribe_with_speakers_parellel_align(model, audio_file: str, hf_token: st
         "word_segments": word_segments_all
     }
     
-    print(len(aligned_segments_all)) # 
-    print(len(word_segments_all)) # 
+    print(len(aligned_segments_all)) # 282
+    print(len(word_segments_all)) # 18364
 
     if detailed_logs:
         print(f"[*] Aligned, performing diarization...")
@@ -91,7 +93,7 @@ def transcribe_with_speakers_parellel_align(model, audio_file: str, hf_token: st
     lines = []
     last_speaker = "UNKNOWN"
 
-    for seg in result_aligned["segments"]: # new whisperx segments
+    for seg in tqdm(result_aligned["segments"], desc="Diarizing segments"):
         start = seg["start"]
         end = seg["end"]
         text = seg["text"].strip()
@@ -107,10 +109,10 @@ def transcribe_with_speakers_parellel_align(model, audio_file: str, hf_token: st
         if speaker is None:
             # No diarization label → fallback
             speaker = last_speaker
-            print(
-                f"[!] Gap detected: {format_time(start)}–{format_time(end)} "
-                f"→ assigning speaker={speaker}"
-            )
+            # tqdm.write(
+            #     f"[!] Gap detected: {format_time(start)}–{format_time(end)} "
+            #     f"→ assigning speaker={speaker}"
+            # )
         else:
             last_speaker = speaker
 
@@ -123,7 +125,8 @@ def transcribe_with_speakers_parellel_align(model, audio_file: str, hf_token: st
         whisper_start = result_aligned["segments"][0]["start"]
         whisper_end = result_aligned["segments"][-1]["end"]
 
-        for turn, _, spk in diarization.itertracks(yield_label=True):
+        turns = list(diarization.itertracks(yield_label=True))
+        for turn, _, spk in tqdm(turns, desc="Filling diarization gaps"):
             if turn.end < whisper_start or turn.start > whisper_end:
                 continue  # outside whisper scope
             overlap = any(
@@ -135,7 +138,7 @@ def transcribe_with_speakers_parellel_align(model, audio_file: str, hf_token: st
                     f"[{format_time(turn.start)} - {format_time(turn.end)}] "
                     f"{spk}: [no Whisper transcript — diarization only]"
                 )
-                print(f"[!] Filling diarization-only gap: {gap_line}")
+                # tqdm.write(f"[!] Filling diarization-only gap: {gap_line}")
                 lines.append(gap_line)
 
     print(len(lines)) 
