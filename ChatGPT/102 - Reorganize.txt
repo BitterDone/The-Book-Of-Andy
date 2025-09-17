@@ -2588,12 +2588,308 @@
 
     Do you want me to rewrite your `transcribe_with_speakers_parellel_align` function with those fixes so you can just drop it in?
 --------------------------------
+    I'm not sure if it's just taking a long time, or if the script gets hung up after the log message:
+    print(f"[*] Aligned, performing diarization...")
 
+    How can I add progress indicators to both the diarization and fill_gaps parts?
 --------------------------------
+    Yes — both **PyAnnote diarization** and your **fill\_gaps loop** can be instrumented with progress indicators. Since these loops are iterable, the easiest way is to wrap them with `tqdm`.
+
+    Here’s how you can do it:
+
+    ---
+
+    ### **1️⃣ Diarization loop**
+
+    ```python
+    from tqdm import tqdm
+
+    # PyAnnote diarization
+    pipeline = Pipeline.from_pretrained(DIARIZATION_MODEL, use_auth_token=hf_token)
+    diarization = pipeline(audio_file)
+
+    lines = []
+    last_speaker = "UNKNOWN"
+
+    for seg in tqdm(result_aligned["segments"], desc="Diarizing segments"):
+        start = seg["start"]
+        end = seg["end"]
+        text = seg["text"].strip()
+
+        # Find diarization speaker that overlaps this whisper segment
+        speaker = None
+        for turn, _, spk in diarization.itertracks(yield_label=True):
+            if turn.start <= end and turn.end >= start:  # overlap condition
+                speaker = spk
+                break
+
+        if speaker is None:
+            speaker = last_speaker
+        else:
+            last_speaker = speaker
+
+        lines.append(f"[{format_time(start)} - {format_time(end)}] {speaker}: {text}")
+    ```
+
+    ---
+
+    ### **2️⃣ Fill gaps loop**
+
+    ```python
+    if fill_gaps:
+        whisper_start = result_aligned["segments"][0]["start"]
+        whisper_end = result_aligned["segments"][-1]["end"]
+
+        turns = list(diarization.itertracks(yield_label=True))
+        for turn, _, spk in tqdm(turns, desc="Filling diarization gaps"):
+            if turn.end < whisper_start or turn.start > whisper_end:
+                continue
+            overlap = any(
+                seg["start"] <= turn.end and seg["end"] >= turn.start
+                for seg in result_aligned["segments"]
+            )
+            if not overlap:
+                gap_line = f"[{format_time(turn.start)} - {format_time(turn.end)}] {spk}: [no Whisper transcript — diarization only]"
+                lines.append(gap_line)
+    ```
+
+    ---
+
+    ### ✅ Benefits
+
+    1. You can see **real-time progress** while the script runs.
+    2. For long podcasts, it makes it obvious if the script is “just slow” vs. stuck.
+    3. `tqdm` works in **console or Jupyter**, and doesn’t interfere with your logs.
+
+    ---
+
+    Optional extra: add **chunk IDs to the progress bars** if using Option B (audio chunk parallelization), e.g.:
+
+    ```python
+    tqdm(result_aligned["segments"], desc=f"[Chunk {chunk_id}] Diarizing segments")
+    ```
+
+    This way you can trace which chunk is processing.
+
+    ---
+
+    If you want, I can **rewrite your `transcribe_with_speakers_parallel_align()` function** to include both chunk-level logging **and** `tqdm` progress bars for diarization and gap filling, so you can monitor the whole pipeline.
+
+    Do you want me to do that?
 --------------------------------
+    I added tqdm to the diarization and fill_gaps parts, but I'm not seeing the progress bar in my console. Here's the code section. Did I do it right?
+
+
+        print(len(aligned_segments_all)) # 282
+        print(len(word_segments_all)) # 18364
+
+        if detailed_logs:
+            print(f"[*] Aligned, performing diarization...")
+        # PyAnnote diarization
+        pipeline = Pipeline.from_pretrained(DIARIZATION_MODEL, use_auth_token=hf_token)
+        diarization = pipeline(audio_file)
+
+        lines = []
+        last_speaker = "UNKNOWN"
+
+        for seg in tqdm(result_aligned["segments"], desc="Diarizing segments"):
+            start = seg["start"]
+            end = seg["end"]
+            text = seg["text"].strip()
+
+
+            # Find diarization speaker that overlaps this whisper segment
+            speaker = None
+            for turn, _, spk in diarization.itertracks(yield_label=True):
+                if turn.start <= end and turn.end >= start:  # overlap condition
+                    speaker = spk
+                    break
+
+            if speaker is None:
+                # No diarization label → fallback
+                speaker = last_speaker
+                print(
+                    f"[!] Gap detected: {format_time(start)}–{format_time(end)} "
+                    f"→ assigning speaker={speaker}"
+                )
+            else:
+                last_speaker = speaker
+
+            lines.append(f"[{format_time(start)} - {format_time(end)}] {speaker}: {text}")
+
+        if detailed_logs:
+            print(f"[*] Diarized, filling gaps...")
+        # Walk through diarization timeline and insert dummy lines if Whisper missed it.
+        if fill_gaps:
+            whisper_start = result_aligned["segments"][0]["start"]
+            whisper_end = result_aligned["segments"][-1]["end"]
+
+            turns = list(diarization.itertracks(yield_label=True))
+            for turn, _, spk in tqdm(turns, desc="Filling diarization gaps"):
+                if turn.end < whisper_start or turn.start > whisper_end:
+                    continue  # outside whisper scope
+                overlap = any(
+                    seg["start"] <= turn.end and seg["end"] >= turn.start
+                    for seg in result_aligned["segments"]
+                )
+                if not overlap:
+                    gap_line = (
+                        f"[{format_time(turn.start)} - {format_time(turn.end)}] "
+                        f"{spk}: [no Whisper transcript — diarization only]"
+                    )
+                    print(f"[!] Filling diarization-only gap: {gap_line}")
+                    lines.append(gap_line)
+
+        print(len(lines)) 
 --------------------------------
+    Ah — I can see why your progress bars aren’t showing nicely in the console. There are two main issues:
+
+    ---
+
+    ### **1️⃣ Printing inside the loop interferes with tqdm**
+
+    Right now you have:
+
+    ```python
+    print(
+        f"[!] Gap detected: {format_time(start)}–{format_time(end)} "
+        f"→ assigning speaker={speaker}"
+    )
+    ```
+
+    and later:
+
+    ```python
+    print(f"[!] Filling diarization-only gap: {gap_line}")
+    ```
+
+    * `tqdm` only updates properly if the loop doesn’t print to stdout each iteration.
+    * Every `print()` call **breaks the progress bar rendering** in the console, so it looks like it’s not updating.
+
+    **Solution:** use `tqdm.write()` for occasional messages instead of `print()`:
+
+    ```python
+    from tqdm import tqdm
+
+    # Example inside loop
+    tqdm.write(f"[!] Gap detected: {format_time(start)}–{format_time(end)} → assigning speaker={speaker}")
+    ```
+
+    `tqdm.write()` prints a line **without breaking the progress bar**, then the bar continues updating.
+
+    ---
+
+    ### **2️⃣ Consider `dynamic_ncols=True`**
+
+    If your console width is small or the default column width doesn’t fit, `tqdm` may render weirdly. Add:
+
+    ```python
+    for seg in tqdm(result_aligned["segments"], desc="Diarizing segments", dynamic_ncols=True):
+    ```
+
+    and similarly for the gap-filling loop:
+
+    ```python
+    for turn, _, spk in tqdm(turns, desc="Filling diarization gaps", dynamic_ncols=True):
+    ```
+
+    ---
+
+    ### ✅ **Summary**
+
+    1. Replace `print()` inside loops with `tqdm.write()`.
+    2. Add `dynamic_ncols=True` to your `tqdm` calls.
+    3. Optional: you can also add `unit="seg"` or `unit="turn"` if you want:
+
+    ```python
+    tqdm(result_aligned["segments"], desc="Diarizing segments", unit="seg", dynamic_ncols=True)
+    ```
+
+    This will make your console progress bars behave correctly.
+
+    ---
+
+    If you want, I can rewrite this whole diarization + gap-filling section with `tqdm.write()` and proper progress bars so you can just drop it in.
+
+    Do you want me to do that?
 --------------------------------
+    It seems to be stuck at the "diarization = pipeline(audio_file)" part, because I see "Got pipeline" but I don't see "Got audio file pipeline"
+
+    print(f"[*] Aligned, performing diarization...")
+    # PyAnnote diarization
+    pipeline = Pipeline.from_pretrained(DIARIZATION_MODEL, use_auth_token=hf_token)
+    print(f"[*] Got pipeline")
+    diarization = pipeline(audio_file)
+    print(f"[*] Got audio file pipeline")
 --------------------------------
+    Ah—this is a **common behavior with PyAnnote pipelines**. That line:
+
+    ```python
+    diarization = pipeline(audio_file)
+    ```
+
+    is **not just loading a small object**—it’s actually:
+
+    1. **Loading the audio file** into memory.
+    2. **Running the neural network** to compute embeddings and segment speakers.
+    3. **Performing full inference**, which is computationally heavy and **CPU/GPU dependent**.
+
+    So it can **take a long time**, especially for long audio files, and during that time **you won’t see any logs**. That explains why your `print(f"[*] Got audio file pipeline")` never appears immediately.
+
+    ---
+
+    ### How to handle this
+
+    1. **Add an explicit progress indicator**:
+
+    ```python
+    import threading
+    import time
+
+    def spinner(msg="Processing..."):
+        while not spinner.done:
+            print(msg, end="\r")
+            time.sleep(1)
+
+    spinner.done = False
+    t = threading.Thread(target=spinner)
+    t.start()
+
+    diarization = pipeline(audio_file)
+
+    spinner.done = True
+    t.join()
+    print("Diarization complete")
+    ```
+
+    * Shows a simple spinning message while PyAnnote runs.
+
+    ---
+
+    2. **Use smaller chunks**:
+
+    * PyAnnote inference time scales with audio length. Splitting the file into 5–10 min chunks will make diarization faster and you can parallelize later if needed.
+
+    3. **Check GPU usage** (if available):
+
+    ```bash
+    nvidia-smi -l 2
+    ```
+
+    * PyAnnote by default may run on CPU, even if you have a GPU. You can move models to GPU by specifying `device="cuda"` when initializing the pipeline.
+
+    ---
+
+    4. **Be patient for long audio files**:
+
+    * For a 1-hour episode, the pipeline can take **several minutes**. Logs won’t appear during that time unless you add explicit callbacks or chunk the audio.
+
+    ---
+
+    If you want, I can **show a way to wrap the PyAnnote `pipeline(audio_file)` call with a TQDM-style progress bar** that updates in real time for each 10–30 second chunk of audio. That way, you’ll see activity even for long files.
+
+    Do you want me to do that?
+
 --------------------------------
 --------------------------------
 --------------------------------
