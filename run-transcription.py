@@ -16,6 +16,8 @@ from tqdm import tqdm
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pydub import AudioSegment
 
+from scripts/helpers import apply_corrections, hash_guid, download_audio, clean_audio, format_time, split_audio_to_chunks
+
 # ---- CONFIG ----
 TRANSCRIPTS_DIR = "original_transcripts"
 # Noticed some accuracy issues with diarization on base. Moving to medium. Large-v3 is even better with a strong GPU.
@@ -35,39 +37,6 @@ COMMON_FIXES = {
 }
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
-
-def apply_corrections(text: str) -> str:
-    """Apply common misheard phrase corrections to transcript text"""
-    for wrong, right in COMMON_FIXES.items():
-        # case-insensitive replace
-        text = text.replace(wrong, right)
-        text = text.replace(wrong.capitalize(), right.capitalize())
-    return text
-
-def hash_guid(guid: str) -> str:
-    """Stable short ID from RSS GUID or URL"""
-    return hashlib.sha1(guid.encode()).hexdigest()[:12]
-
-def download_audio(url: str, dest: str):
-    """Download audio file from RSS enclosure URL"""
-    r = requests.get(url, stream=True)
-    r.raise_for_status()
-    with open(dest, "wb") as f:
-        for chunk in r.iter_content(chunk_size=8192):
-            f.write(chunk)
-
-def clean_audio(infile: str, outfile: str):
-    """Convert audio to mono 16kHz WAV for Whisper, pad start/end to keep intro/outro"""
-    subprocess.run([
-        "ffmpeg", "-y", "-i", infile,
-        "-ac", "1", "-ar", "16000",
-        "-af", "apad=pad_dur=2",  # pad 2 seconds of silence at start and end
-                                  # increase pad_dur if intros are longer or quieter.
-        outfile
-    ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-def format_time(seconds: float) -> str:
-    return str(timedelta(seconds=int(seconds)))
 
 def process_chunk(chunk_file):
     # Load models inside the process to avoid pickling issues
@@ -95,15 +64,6 @@ def process_chunk(chunk_file):
         word_segments.extend(aligned["word_segments"])
 
     return aligned_segments, word_segments
-
-def split_audio_to_chunks(audio_path, chunk_length_ms=AUDIO_FILE_CHUNK_LENGTH_MS):
-    audio = AudioSegment.from_file(audio_path)
-    chunks = []
-    for i in range(0, len(audio), chunk_length_ms):
-        chunk_file = f"{audio_path}_chunk{i//1000}.wav"
-        audio[i:i+chunk_length_ms].export(chunk_file, format="wav")
-        chunks.append(chunk_file)
-    return chunks
     
 def transcribe_with_speakers_parellel_align(model, audio_file: str, hf_token: str, fill_gaps: bool, detailed_logs: bool) -> str:
     chunks = split_audio_to_chunks(audio_file)
@@ -138,7 +98,7 @@ def transcribe_with_speakers(model, audio_file: str, hf_token: str, fill_gaps: b
     and filling diarization gaps with Whisper fallback.
     """
     
-    print(f"[✓] args.detailed_logs: {args.detailed_logs}")
+    print(f"[✓] detailed_logs: {detailed_logs}")
     # Removed whisper in favor of whisperx
     # # Whisper with timestamps
     # result = model.transcribe(audio_file, word_timestamps=True)
@@ -199,6 +159,9 @@ def transcribe_with_speakers(model, audio_file: str, hf_token: str, fill_gaps: b
         "segments": aligned_segments,   # not currently used since keeping TQDM progress bar
         "word_segments": word_segments  # used for eliminating timestamp gaps and better alignment
     }
+    
+    print(len(aligned_segments)) 
+    print(len(word_segments))
 
     # # Use this without TQDM progress bar
     # # Step 3: Perform alignment for accurate word-level timestamps
@@ -267,6 +230,7 @@ def transcribe_with_speakers(model, audio_file: str, hf_token: str, fill_gaps: b
                 print(f"[!] Filling diarization-only gap: {gap_line}")
                 lines.append(gap_line)
 
+    print(len(lines)) 
     # Keep transcript sorted by time
     def line_start_time(line: str) -> float:
         # extract HH:MM:SS from "[HH:MM:SS - ...]"
@@ -280,6 +244,7 @@ def transcribe_with_speakers(model, audio_file: str, hf_token: str, fill_gaps: b
 
     if detailed_logs:
         print(f"[*] Sorted, returning from transcribe_with_speakers()")
+    print(len(lines)) 
     return apply_corrections("\n".join(lines))
 
 def transcribe(model, audio_file: str) -> str:
@@ -337,8 +302,12 @@ def main():
         raw_audio = os.path.join(outdir, fname_base + ".mp3")
         clean_wav = os.path.join(outdir, fname_base + ".wav")
 
-        print(f"[*] Downloading: {title}")
-        download_audio(audio_url, raw_audio)
+        # ✅ Skip downloading if audio already exists
+        if os.path.exists(raw_audio) or os.path.exists(clean_wav):
+            print(f"[*] Skipping download for {title} (audio already exists).")
+        else:
+            print(f"[*] Downloading: {title}")
+            download_audio(audio_url, raw_audio)
 
         print(f"[*] Cleaning audio...")
         clean_audio(raw_audio, clean_wav)
@@ -346,9 +315,7 @@ def main():
         if args.diarize.lower() == "on":
             print(f"[*] Transcribing with speakers...")
             # Full transcription with diarization
-            print(f"[✓] args.detailed_logs.lower(): {args.detailed_logs.lower()}")
-            print(f"[✓] == on: {args.detailed_logs.lower() == 'on'}")
-            transcript = transcribe_with_speakers(model, clean_wav, args.token, fill_gaps=(args.fill_gaps.lower() == "on"), detailed_logging=(args.detailed_logs.lower() == "on"))
+            transcript = transcribe_with_speakers(model, clean_wav, args.token, fill_gaps=(args.fill_gaps.lower() == "on"), detailed_logs=(args.detailed_logs.lower() == "on"))
         else:
             print(f"[*] Transcribing without speakers...")
             # Simple transcription without diarization
@@ -361,9 +328,9 @@ def main():
             f.write(f"GUID: {guid}\n\n")
             f.write(transcript.strip() + "\n")
 
-        # Cleanup
-        os.remove(raw_audio)
-        os.remove(clean_wav)
+        # # Cleanup
+        # os.remove(raw_audio)
+        # os.remove(clean_wav)
 
         print(f"[✓] Saved transcript: {txt_path}")
 
