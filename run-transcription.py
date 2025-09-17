@@ -13,9 +13,11 @@ import warnings
 import torch
 from tqdm import tqdm
 from concurrent.futures import ProcessPoolExecutor, as_completed
+import threading
+import time
 
 from scripts.helpers import apply_corrections, hash_guid, download_audio, clean_audio, format_time, split_audio_to_chunks
-from slimfile import transcribe, transcribe_with_speakers
+from scripts.slimfile import transcribe, transcribe_with_speakers
 
 # ---- CONFIG ----
 TRANSCRIPTS_DIR = "original_transcripts"
@@ -27,6 +29,11 @@ MAX_WORKERS = min(os.cpu_count(), 8)  # limit to 8 or your CPU count
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
+def spinner(msg="Processing..."):
+    while not spinner.done:
+        print(msg, end="\r")
+        time.sleep(1)
+        
 def process_chunk(chunk_file, chunk_id):
     # Load models inside the process to avoid pickling issues
     # Load Whisper model once
@@ -84,16 +91,28 @@ def transcribe_with_speakers_parellel_align(model, audio_file: str, hf_token: st
     
     print(len(aligned_segments_all)) # 282
     print(len(word_segments_all)) # 18364
+    
+    spinner.done = False
+    t = threading.Thread(target=spinner)
+    t.start()
 
     if detailed_logs:
         print(f"[*] Aligned, performing diarization...")
     # PyAnnote diarization
     pipeline = Pipeline.from_pretrained(DIARIZATION_MODEL, use_auth_token=hf_token)
+    print(f"[*] Got pipeline")
     diarization = pipeline(audio_file)
+        
+    spinner.done = True
+    t.join()
+    print("Diarization complete")
+
+    print(f"[*] Got audio file pipeline")
 
     lines = []
     last_speaker = "UNKNOWN"
 
+    print(f"[*] Start TQDM")
     for seg in tqdm(result_aligned["segments"], desc="Diarizing segments"):
         start = seg["start"]
         end = seg["end"]
