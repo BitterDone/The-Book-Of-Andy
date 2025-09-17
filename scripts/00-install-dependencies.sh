@@ -86,6 +86,7 @@ echo "[*] Installing/updating Python packages..."
     soundfile \
     huggingface_hub \
     ffmpeg \
+    pydub \
     git+https://github.com/m-bain/whisperx.git \
     git+https://github.com/openai/whisper.git # removed for whisperx for better timestamps
 
