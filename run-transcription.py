@@ -1,40 +1,24 @@
 #!/usr/bin/env python3
 # Fully-Python script with speaker diarization
 import argparse
-import hashlib
 import os
-import subprocess
 import feedparser
-import requests
 import whisperx
 from pyannote.audio import Pipeline
-from datetime import timedelta
 import warnings
-import math
 import torch
 from tqdm import tqdm
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from pydub import AudioSegment
 
-from scripts/helpers import apply_corrections, hash_guid, download_audio, clean_audio, format_time, split_audio_to_chunks
+from scripts.helpers import apply_corrections, hash_guid, download_audio, clean_audio, format_time, split_audio_to_chunks
 
 # ---- CONFIG ----
 TRANSCRIPTS_DIR = "original_transcripts"
 # Noticed some accuracy issues with diarization on base. Moving to medium. Large-v3 is even better with a strong GPU.
 WHISPER_MODEL = "medium"  # tiny, base, small, medium, large
 DIARIZATION_MODEL = "pyannote/speaker-diarization-3.1"
-AUDIO_FILE_CHUNK_LENGTH_MS = 60 * 1000 * 10  # 10 min
 ALIGN_LANG="en"
 MAX_WORKERS = min(os.cpu_count(), 8)  # limit to 8 or your CPU count
-
-# Common misheard phrase corrections
-COMMON_FIXES = {
-    "smoking mirrors": "smoke and mirrors",
-    "jury box": "jewelry box",
-    "booted slow": "booty swole",
-    "Priscilla": "Frisella",
-    # add more as you encounter them
-}
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 

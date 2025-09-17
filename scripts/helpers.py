@@ -1,4 +1,23 @@
 #!/usr/bin/env python3
+
+import hashlib
+import subprocess
+import requests
+from datetime import timedelta
+import math
+from pydub import AudioSegment
+
+AUDIO_FILE_CHUNK_LENGTH_MS = 60 * 1000 * 10  # 10 min
+
+# Common misheard phrase corrections
+COMMON_FIXES = {
+    "smoking mirrors": "smoke and mirrors",
+    "jury box": "jewelry box",
+    "booted slow": "booty swole",
+    "Priscilla": "Frisella",
+    # add more as you encounter them
+}
+
 def apply_corrections(text: str) -> str:
     """Apply common misheard phrase corrections to transcript text"""
     for wrong, right in COMMON_FIXES.items():
