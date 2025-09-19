@@ -6,6 +6,10 @@ import requests
 from datetime import timedelta
 import math
 from pydub import AudioSegment
+import threading
+import time
+from tqdm import tqdm
+import torchaudio
 
 AUDIO_FILE_CHUNK_LENGTH_MS = 60 * 1000 * 10  # 10 min
 
@@ -60,3 +64,46 @@ def split_audio_to_chunks(audio_path, chunk_length_ms=AUDIO_FILE_CHUNK_LENGTH_MS
         audio[i:i+chunk_length_ms].export(chunk_file, format="wav")
         chunks.append(chunk_file)
     return chunks
+
+def run_with_progress(pipeline, audio_file, desc="Running diarization", speed_factor=0.25):
+    """
+    Wraps PyAnnote pipeline(audio_file) with a tqdm progress bar.
+
+    Args:
+        pipeline: The PyAnnote pipeline object
+        audio_file: Path to audio file
+        desc: Label for the tqdm bar
+        speed_factor: Rough multiplier (smaller = faster relative processing).
+                    Adjust based on your system (try 0.2–0.5).
+
+    Returns:
+        diarization result
+    """
+    # Estimate duration (in seconds) of the audio file
+    info = torchaudio.info(audio_file)
+    duration = info.num_frames / info.sample_rate
+
+    # Estimate how long diarization will take
+    est_time = duration * speed_factor
+
+    result = {}
+
+    def run_pipeline():
+        result["diarization"] = pipeline(audio_file)
+
+    # Launch pipeline in background
+    t = threading.Thread(target=run_pipeline)
+    t.start()
+
+    # Progress bar (ticks in 1-second steps)
+    with tqdm(total=int(est_time), desc=desc, unit="s", dynamic_ncols=True) as pbar:
+        elapsed = 0
+        while t.is_alive():
+            time.sleep(1)
+            elapsed += 1
+            pbar.update(1 if elapsed <= est_time else 0)
+        t.join()
+        pbar.n = pbar.total  # force complete
+        pbar.close()
+
+    return result["diarization"]

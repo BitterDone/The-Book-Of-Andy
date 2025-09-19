@@ -16,7 +16,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 import threading
 import time
 
-from scripts.helpers import apply_corrections, hash_guid, download_audio, clean_audio, format_time, split_audio_to_chunks
+from scripts.helpers import apply_corrections, hash_guid, download_audio, clean_audio, format_time, split_audio_to_chunks, run_with_progress
 from scripts.slimfile import transcribe, transcribe_with_speakers
 
 # ---- CONFIG ----
@@ -92,19 +92,20 @@ def transcribe_with_speakers_parellel_align(model, audio_file: str, hf_token: st
     print(len(aligned_segments_all)) # 282
     print(len(word_segments_all)) # 18364
     
-    spinner.done = False
-    t = threading.Thread(target=spinner)
-    t.start()
+    # spinner.done = False
+    # t = threading.Thread(target=spinner)
+    # t.start()
 
     if detailed_logs:
         print(f"[*] Aligned, performing diarization...")
     # PyAnnote diarization
     pipeline = Pipeline.from_pretrained(DIARIZATION_MODEL, use_auth_token=hf_token)
     print(f"[*] Got pipeline")
-    diarization = pipeline(audio_file)
+    # diarization = pipeline(audio_file)
+    diarization = run_with_progress(pipeline, audio_file)
         
-    spinner.done = True
-    t.join()
+    # spinner.done = True
+    # t.join()
     print("Diarization complete")
 
     print(f"[*] Got audio file pipeline")

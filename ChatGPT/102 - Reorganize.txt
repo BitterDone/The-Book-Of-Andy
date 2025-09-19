@@ -2889,11 +2889,161 @@
     If you want, I can **show a way to wrap the PyAnnote `pipeline(audio_file)` call with a TQDM-style progress bar** that updates in real time for each 10–30 second chunk of audio. That way, you’ll see activity even for long files.
 
     Do you want me to do that?
+--------------------------------
+    Yes
+--------------------------------
+    Perfect 👍 — we can wrap `pipeline(audio_file)` with a fake-but-informative progress bar that ticks along as PyAnnote processes.
 
+    Since PyAnnote doesn’t expose internal progress, the trick is:
+
+    * Estimate **audio duration**.
+    * Run `pipeline(audio_file)` in a **separate thread/process**.
+    * While it runs, update a `tqdm` bar based on elapsed wall time compared to expected processing time.
+    * When it finishes, close the bar cleanly.
+
+    Here’s a drop-in wrapper for you:
+
+    ```python
+    import threading
+    import time
+    from tqdm import tqdm
+    import torchaudio
+
+    def run_with_progress(pipeline, audio_file, desc="Running diarization", speed_factor=0.25):
+        """
+        Wraps PyAnnote pipeline(audio_file) with a tqdm progress bar.
+
+        Args:
+            pipeline: The PyAnnote pipeline object
+            audio_file: Path to audio file
+            desc: Label for the tqdm bar
+            speed_factor: Rough multiplier (smaller = faster relative processing).
+                        Adjust based on your system (try 0.2–0.5).
+
+        Returns:
+            diarization result
+        """
+        # Estimate duration (in seconds) of the audio file
+        info = torchaudio.info(audio_file)
+        duration = info.num_frames / info.sample_rate
+
+        # Estimate how long diarization will take
+        est_time = duration * speed_factor
+
+        result = {}
+
+        def run_pipeline():
+            result["diarization"] = pipeline(audio_file)
+
+        # Launch pipeline in background
+        t = threading.Thread(target=run_pipeline)
+        t.start()
+
+        # Progress bar (ticks in 1-second steps)
+        with tqdm(total=int(est_time), desc=desc, unit="s") as pbar:
+            elapsed = 0
+            while t.is_alive():
+                time.sleep(1)
+                elapsed += 1
+                pbar.update(1 if elapsed <= est_time else 0)
+            t.join()
+            pbar.n = pbar.total  # force complete
+            pbar.close()
+
+        return result["diarization"]
+    ```
+
+    Usage:
+
+    ```python
+    print("[*] Aligned, performing diarization...")
+    pipeline = Pipeline.from_pretrained(DIARIZATION_MODEL, use_auth_token=hf_token)
+    print("[*] Got pipeline")
+
+    diarization = run_with_progress(pipeline, audio_file)
+
+    print("[*] Got audio file pipeline")
+    ```
+
+    ---
+
+    ### What this does
+
+    * Shows a **progress bar** while diarization runs.
+    * Progress bar length is **estimated** from audio length × speed factor.
+    * When diarization finishes, bar jumps to 100% and exits cleanly.
+
+    ---
+
+👉 Question for you: how long (minutes/hours) are your typical podcast/audio files? That will help me recommend a good default `speed_factor`.
 --------------------------------
+    Got it 👍 — so each chunk is **\~10 minutes long**. That’s great context.
+
+    Here’s why it matters for `run_with_progress`:
+
+    * Diarization runtime with `pyannote/speaker-diarization-3.1` is roughly **real-time or 2–3× slower than real-time** depending on your CPU/GPU.
+    * So a **10-minute chunk** might take anywhere from **10–30 minutes** to diarize.
+    * The `speed_factor` in my wrapper should reflect that.
+
+    For example:
+
+    * If your system is \~**2× slower than real-time**:
+    `speed_factor = 2.0` (processing time ≈ audio length × 2).
+    * If you’re close to real-time:
+    `speed_factor = 1.0`.
+    * If you’re fast GPU-accelerated:
+    `speed_factor = 0.5`.
+
+    ---
+
+    Here’s a tuned version for your setup:
+
+    ```python
+    def run_with_progress(pipeline, audio_file, desc="Running diarization", speed_factor=2.0):
+        """
+        Wraps PyAnnote pipeline(audio_file) with a tqdm progress bar.
+        For 10-minute chunks, expect 10–30 min runtime depending on GPU/CPU.
+
+        speed_factor:
+            1.0 ≈ real-time
+            2.0 ≈ 2x slower than real-time
+            0.5 ≈ 2x faster than real-time
+        """
+        import threading, time, torchaudio
+        from tqdm import tqdm
+
+        info = torchaudio.info(audio_file)
+        duration = info.num_frames / info.sample_rate
+        est_time = duration * speed_factor
+
+        result = {}
+
+        def run_pipeline():
+            result["diarization"] = pipeline(audio_file)
+
+        t = threading.Thread(target=run_pipeline)
+        t.start()
+
+        with tqdm(total=int(est_time), desc=desc, unit="s", dynamic_ncols=True) as pbar:
+            elapsed = 0
+            while t.is_alive():
+                time.sleep(1)
+                elapsed += 1
+                pbar.update(1 if elapsed <= est_time else 0)
+            t.join()
+            pbar.n = pbar.total
+            pbar.close()
+
+        return result["diarization"]
+    ```
+
+    ---
+
+    ⚡ Suggestion: Since you’re already **chunking the audio**, you could also choose to **run diarization per chunk in parallel** (like you’re doing with Whisper transcription). That way each diarization task only takes \~10–30 minutes, and with multiple workers it could speed things up dramatically.
+
+    👉 Do you want me to show you how to parallelize diarization per chunk the same way you already parallelized `process_chunk()`?
 --------------------------------
---------------------------------
---------------------------------
+
 --------------------------------
 --------------------------------
 --------------------------------
