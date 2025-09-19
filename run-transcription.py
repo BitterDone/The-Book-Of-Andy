@@ -7,6 +7,7 @@ os.environ["TORCH_CPP_LOG_LEVEL"] = "ERROR"
 
 import argparse
 import feedparser
+import whisper
 import whisperx
 from pyannote.audio import Pipeline
 import warnings
@@ -198,7 +199,7 @@ def transcribe_with_speakers_parellel_align(model, audio_file: str, hf_token: st
     print(len(lines)) 
     return apply_corrections("\n".join(lines))
 
-def start_process(args, outdir, model):
+def start_process(args, outdir):
     feed = feedparser.parse(args.rss)
 
     for entry in feed.entries:
@@ -226,10 +227,22 @@ def start_process(args, outdir, model):
 
         if args.diarize.lower() == "on":
             print(f"[*] Transcribing with speakers...")
+            # transcribe_with_speakers needs a model given to it? or not?
             # transcript = transcribe_with_speakers(model, clean_wav, args.token, fill_gaps=(args.fill_gaps.lower() == "on"), detailed_logs=(args.detailed_logs.lower() == "on"))
+            
             transcript = transcribe_with_speakers_parellel_align("", clean_wav, args.token, fill_gaps=(args.fill_gaps.lower() == "on"), detailed_logs=(args.detailed_logs.lower() == "on"))
         else:
             print(f"[*] Transcribing without speakers...")
+            
+            # Can't load the model in main() if using ProcessPoolExecutor
+            print(f"[*] Loading Whisper model: {WHISPER_MODEL}")
+            model = whisper.load_model(WHISPER_MODEL, device)
+            # # large-v3 requires ~10 GB VRAM minimum. An A100 (40GB) or H100 is safe.
+            # # medium requires ~5 GB VRAM. Runs fine on cheaper GPUs like T4.
+            # # If out-of-memory errors arise, fall back to "base" at WHISPER_MODEL = "medium"
+            # # Or enable compute_type="int8" for quantization:
+            # model = whisperx.load_model(WHISPER_MODEL, device, compute_type="int8")
+            
             transcript = transcribe(model, clean_wav, apply_corrections = apply_corrections)
 
         print(f"[*] Writing file...")
@@ -262,16 +275,7 @@ def main():
     outdir = os.path.join(args.repo, TRANSCRIPTS_DIR)
     os.makedirs(outdir, exist_ok=True)
 
-    # # Can't load the model out here if using ProcessPoolExecutor
-    # print(f"[*] Loading Whisper model: {WHISPER_MODEL}")
-    # model = whisperx.load_model(WHISPER_MODEL, device)
-    # # # large-v3 requires ~10 GB VRAM minimum. An A100 (40GB) or H100 is safe.
-    # # # medium requires ~5 GB VRAM. Runs fine on cheaper GPUs like T4.
-    # # # If out-of-memory errors arise, fall back to "base" at WHISPER_MODEL = "medium"
-    # # # Or enable compute_type="int8" for quantization:
-    # # model = whisperx.load_model(WHISPER_MODEL, device, compute_type="int8")
-
-    start_process(args, outdir, model=None)
+    start_process(args, outdir)
 
 if __name__ == "__main__":
     main()
