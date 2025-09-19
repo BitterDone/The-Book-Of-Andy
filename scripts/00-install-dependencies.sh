@@ -8,7 +8,7 @@ wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/
 sudo mv cuda-ubuntu2004.pin /etc/apt/preferences.d/cuda-repository-pin-600
 export last_public_key=3bf863cc
 sudo apt-key adv --fetch-keys https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/${last_public_key}.pub
-sudo add-apt-repository "deb https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/ /"
+sudo add-apt-repository -y "deb https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/ /"
 sudo apt-get update
 sudo apt-get install libcudnn8
 sudo apt-get install libcudnn8-dev
