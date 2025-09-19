@@ -16,7 +16,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 import threading
 import time
 
-from scripts.helpers import apply_corrections, hash_guid, download_audio, clean_audio, format_time, split_audio_to_chunks, run_with_progress
+from scripts.helpers import apply_corrections, hash_guid, download_audio, clean_audio, format_time, split_audio_to_chunks, run_with_progress, log_eta
 from scripts.slimfile import transcribe, transcribe_with_speakers
 
 # ---- CONFIG ----
@@ -33,31 +33,48 @@ def spinner(msg="Processing..."):
     while not spinner.done:
         print(msg, end="\r")
         time.sleep(1)
-        
-def process_chunk(chunk_file, chunk_id):
-    # Load models inside the process to avoid pickling issues
-    # Load Whisper model once
-    print(f"[*] Chunk #{chunk_id} Loading Whisper model: {WHISPER_MODEL}")
-    model = whisperx.load_model(WHISPER_MODEL, device)
-    # # large-v3 requires ~10 GB VRAM minimum. An A100 (40GB) or H100 is safe.
-    # # medium requires ~5 GB VRAM. Runs fine on cheaper GPUs like T4.
-    # # If out-of-memory errors arise,
-    # # fall back to "base" at WHISPER_MODEL = "medium"
-    # # Or enable compute_type="int8" for quantization:
-    # model = whisperx.load_model(WHISPER_MODEL, device, compute_type="int8")
 
-    align_model, metadata = whisperx.load_align_model(language_code=ALIGN_LANG, device=device)
+# Globals initialized once per worker
+_model = None
+_align_model = None
+_metadata = None
+
+def init_worker():
+    global _model, _align_model, _metadata
+    print("[*] Initializing Whisper + align model once in worker")
+    _model = whisperx.load_model(WHISPER_MODEL, device)
+    _align_model, _metadata = whisperx.load_align_model(language_code=ALIGN_LANG, device=device)
+
+def process_chunk(chunk_file, chunk_id):
+    global _model, _align_model, _metadata
+    print(f"[*] Worker processing chunk #{chunk_id}")
+    result = _model.transcribe(chunk_file, language="en")
+    
+# def process_chunk(chunk_file, chunk_id):
+#     # Load models inside the process to avoid pickling issues
+#     # Load Whisper model once
+#     print(f"[*] Chunk #{chunk_id} Loading Whisper model: {WHISPER_MODEL}")
+#     model = whisperx.load_model(WHISPER_MODEL, device)
+#     # # large-v3 requires ~10 GB VRAM minimum. An A100 (40GB) or H100 is safe.
+#     # # medium requires ~5 GB VRAM. Runs fine on cheaper GPUs like T4.
+#     # # If out-of-memory errors arise,
+#     # # fall back to "base" at WHISPER_MODEL = "medium"
+#     # # Or enable compute_type="int8" for quantization:
+#     # model = whisperx.load_model(WHISPER_MODEL, device, compute_type="int8")
+
+#     align_model, metadata = whisperx.load_align_model(language_code=ALIGN_LANG, device=device)
 
     # Transcribe chunk
-    print(f"[*] Transcribing chunk #{chunk_id}")
-    result = model.transcribe(chunk_file, language="en")
+    print(f"[*] Transcribing chunk #{chunk_id} with global model")
+    result = _model.transcribe(chunk_file, language="en")
     print(f"[*] Transcribed chunk #{chunk_id}")
 
     # Align segments
     word_segments = []
     aligned_segments = []
     for seg in result["segments"]:
-        aligned = whisperx.align([seg], align_model, metadata, chunk_file, device)
+        # aligned = whisperx.align([seg], align_model, metadata, chunk_file, device)
+        aligned = whisperx.align([seg], _align_model, _metadata, chunk_file, device)
         aligned_segments.append(aligned["segments"][0])
         word_segments.extend(aligned["word_segments"])
 
@@ -69,7 +86,8 @@ def transcribe_with_speakers_parellel_align(model, audio_file: str, hf_token: st
     aligned_segments_all = []
     word_segments_all = []
 
-    with ProcessPoolExecutor(MAX_WORKERS) as executor:
+    with ProcessPoolExecutor(MAX_WORKERS, initializer=init_worker) as executor:
+    # with ProcessPoolExecutor(MAX_WORKERS) as executor:
         futures = [executor.submit(process_chunk, chunk, idx) for idx, chunk in enumerate(chunks)]
         for future in as_completed(futures):
             aligned_segments, word_segments = future.result()
@@ -98,6 +116,7 @@ def transcribe_with_speakers_parellel_align(model, audio_file: str, hf_token: st
 
     if detailed_logs:
         print(f"[*] Aligned, performing diarization...")
+        log_eta("Diarization", audio_file, speed_factor=0.7)
     # PyAnnote diarization
     pipeline = Pipeline.from_pretrained(DIARIZATION_MODEL, use_auth_token=hf_token)
     print(f"[*] Got pipeline")
