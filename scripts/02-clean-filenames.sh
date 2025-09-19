@@ -5,8 +5,10 @@ cd original_transcripts
 
 echo "-->          cd'd original_transcripts. make removeSpecialChars"
 mkdir removeSpecialChars
+mkdir backup
 
 echo "-->          made removeSpecialChars. move txt files"
+cp *.txt ./backup/
 mv *.txt ./removeSpecialChars/
 
 echo "-->          moved txt files. cd removeSpecialChars"
